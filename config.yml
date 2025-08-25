@@ -1,0 +1,5 @@
+VIBRANT_db: 'VMP/databases/VIBRANT_db'
+CheckV_db: 'VMP/databases/CheckV_db'
+Kaiju_db: '/your/path/to/Kaiju_db'
+geNomad_db: '/your/path/to/geNomad_db'
+VPAC_models: 'VMP/databases/VPAC_models'
