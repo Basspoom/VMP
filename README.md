@@ -52,12 +52,13 @@ cd VMP
 
 ### Create the conda environment
 
-The VMP uses three separate Conda environments to manage dependencies effectively. The `environment` files are located in the `VMP/environments` directory.
+The VMP uses four separate Conda environments to manage dependencies effectively. The `environment` files are located in the `VMP/environments` directory.
 
 ```bash
 conda env create -f environments/VMP.yml -n VMP
 conda env create -f environments/VPAC-single.yml -n VPAC-single
 conda env create -f environments/VPAC-dual.yml -n VPAC-dual
+conda env create -f environments/Binning.yml -n Binning
 ```
 
 
@@ -141,8 +142,7 @@ python <script>.py -h
 
 `end2end.py`
 
-Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step. 
-
+Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step.
 
 #### Command Template:
 ```bash
@@ -174,6 +174,7 @@ Performs quality control on raw reads, including adapter trimming, quality filte
 
 #### Command Template:
 ```bash
+conda activate VMP
 python QC.py --config_path ~/VMP/config.yml --input_reads ~/VMP/examples/sample.fastq.gz --output_dir ~/VMP/examples/example_run_outputs/qc_run
 ```
 
@@ -198,6 +199,7 @@ Assembles the cleaned reads into contigs using **MEGAHIT** or **SPAdes** (user s
 
 #### Command Template:
 ```bash
+conda activate VMP
 python Assembly.py --config_path ~/VMP/config.yml --input_reads ~/VMP/examples/example_run_outputs/qc_run/clean_reads.fq.gz --assembler megahit  --output_dir ~/VMP/examples/example_run_outputs/assembly_run
 
 ```
@@ -224,6 +226,7 @@ Users can choose one of the eight **VPAC single-path classifiers** to identify v
 
 #### Command Template:
 ```bash
+conda activate VPAC-single
 python VPAC-single.py --config_path ~/VMP/config.yml --input_contigs ~/VMP/examples/example_run_outputs/assembly_run/contigs.fasta --output_dir ~/VMP/examples/example_run_outputs/vpac_single_run
 ```
 
@@ -246,6 +249,7 @@ Runs the **VPAC dual-path classifier**, integrating viral scoring system and Evo
 
 #### Command Template:
 ```bash
+conda activate VPAC-dual
 python VPAC-dual.py --config_path ~/VMP/config.yml --input_contigs ~/VMP/examples/example_run_outputs/assembly_run/contigs.fasta --output_dir ~/VMP/examples/example_run_outputs/vpac_dual_run
 ```
 
@@ -271,6 +275,7 @@ Clusters **viral contigs** into vOTUs using either ***CD-HIT + MMseqs2*** or ***
 
 #### Command Template:
 ```bash
+conda activate VMP
 python Clustering.py --input_viral_contigs ~/VMP/examples/example_run_outputs/vpac_dual_run/viral_contigs.fasta  --output_dir ~/VMP/examples/example_run_outputs/clustering_run```
 ```
 
@@ -297,6 +302,7 @@ Bins **non-viral contigs** into MAGs using ***metaWRAP*** and dereplication with
 
 #### Command Template:
 ```bash
+conda activate Binning
 python Binning.py --input_nonviral_contigs ~/VMP/examples/example_run_outputs/vpac_dual_run/nonviral_contigs.fasta  --output_dir ~/VMP/examples/example_run_outputs/binning_run
 ```
 
