@@ -27,8 +27,8 @@
   - [Acknowledgments](#acknowledgments)
   - [Contacts](#Contacts)
 
-
-
+  
+  
 
 ## Description
 
@@ -36,6 +36,8 @@ The **VMP (Virus Mining Pipeline)** is a modular and automated pipeline for mini
 It integrates state-of-the-art tools for **quality control, assembly, viral contigs identification (our self-developed VPAC), clustering of viral genomes (vOTUs), and binning of microbial genomes (MAGs)**.
 With its AI-empowered classifier VPAC, VMP provides both high accuracy and scalability across diverse microbiomes.
 
+  
+    
 
 ## Installation
 
@@ -101,26 +103,26 @@ After downloading, update the paths of databases in your VMP/config.yml file to 
 >    VPAC_models: 'VMP/databases/VPAC_models'
 > ```
 
-
-
+  
+  
 
 
 ## Quick Start
 
 The VMP is composed of seven modular scripts plus one orchestration script for fully automated execution. Each script corresponds to a major step in the virus mining workflow:
 
-`end2end.py`  Orchestration script. Runs the entire pipeline (QC → Assembly → Viral Identification → Clustering → Binning) starting from raw reads.
-`QC.py`  Performs quality control and host decontamination on raw sequencing reads.
-`Assembly.py`  Assembles cleaned reads into contigs using either MEGAHIT or SPAdes.
-`VPAC-single.py`  Identifies viral contigs with the computationally efficient single-path classifier.
-`VPAC-dual.py`  Identifies viral contigs with the more accurate Evo-enhanced dual-path classifier.
-`Clustering.py`  Groups viral contigs into vOTUs using CD-HIT/MMseqs2 or Skani/PyLeiden.
-`Binning.py`  Bins non-viral contigs into microbial genomes (MAGs) using metaWRAP and dRep.
+- `end2end.py`  Orchestration script. Runs the entire pipeline (QC → Assembly → Viral Identification → Clustering → Binning) starting from raw reads.
+- `QC.py`  Performs quality control and host decontamination on raw sequencing reads.
+- `Assembly.py`  Assembles cleaned reads into contigs using either MEGAHIT or SPAdes.
+- `VPAC_single.py`  Identifies viral contigs with the computationally efficient single-path classifier.
+- `VPAC_dual.py`  Identifies viral contigs with the more accurate Evo-enhanced dual-path classifier.
+- `Clustering.py`  Groups viral contigs into vOTUs using CD-HIT/MMseqs2 or Skani/PyLeiden.
+- `Binning.py`  Bins non-viral contigs into microbial genomes (MAGs) using metaWRAP and dRep.
 
 These scripts can be executed independently for modular analysis, or sequentially combined for a complete workflow. The relationship is illustrated below:
 
 ```sql
-Raw Reads → QC.py → Assembly.py → VPAC-single.py / VPAC-dual.py → Clustering.py → Binning.py ————→ vOTUs and MAGs
+Raw Reads → QC.py → Assembly.py → VPAC_single.py / VPAC_dual.py → Clustering.py → Binning.py ————→ vOTUs and MAGs
         |
         └──────────→ end2end.py (automated full pipeline) ————→ vOTUs and MAG
 ```
@@ -129,7 +131,7 @@ In the following sections, we introduce each script with a **Command Template** 
 ```bash
 python <script>.py -h
 ```
-
+  
 
 ### Automated Run 
 
@@ -158,7 +160,7 @@ python end2end.py -h
 - Summary reports (statistics files and figures)
 
 
-
+  
 
 ### Quality Control
 
@@ -182,6 +184,7 @@ python QC.py -h
 - QC report (Q20, Q30, sequencing depth, k-mer profile, coverage estimation)
 
 
+  
 
 ### Assembly
 
@@ -206,6 +209,7 @@ python Assembly.py -h
 - Assembly statistics (number of contigs, N50, average length)
 
 
+  
 
 ### Viral Contig Identification
 
@@ -252,6 +256,7 @@ python VPAC-dual.py -h
 - Summary report
 
 
+  
 
 ### Clustering
 
@@ -277,6 +282,7 @@ python Clustering.py -h
 
 
 
+  
 
 ### Binning
 
@@ -302,6 +308,8 @@ python Binning.py -h
 
 
 
+  
+  
 
 
 
@@ -320,13 +328,15 @@ python Binning.py -h
 }
 ```
 
-
+  
+  
 
 ## Acknowledgments
 
 We acknowledge ***Hefei HiDimension Biotechnology Co., Ltd.*** for providing technical assistance and resources!!! 🥰
 
-
+  
+  
 
 ## Contacts
 
