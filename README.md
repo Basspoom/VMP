@@ -105,46 +105,200 @@ After downloading, update the paths of databases in your VMP/config.yml file to 
 
 
 
-
-
 ## Quick Start
 
-The GEM-PHI pipeline consists of three main scripts for feature calculation and one script for orchestration. All scripts are located in the `VMP/bin/` directory.
+The VMP is composed of seven modular scripts plus one orchestration script for fully automated execution. Each script corresponds to a major step in the virus mining workflow:
 
-1. `calculate_node_features.py`: This script is the first step of the pipeline. It takes host and phage FASTA files as input and computes a variety of node-level features, including GC content, k-mer frequency, nucleotide transformer embeddings, and RBP embeddings for phages. This script must be run in the `GEM-PHI_nodes` Conda environment.
+`end2end.py`  Orchestration script. Runs the entire pipeline (QC → Assembly → Viral Identification → Clustering → Binning) starting from raw reads.
+`QC.py`  Performs quality control and host decontamination on raw sequencing reads.
+`Assembly.py`  Assembles cleaned reads into contigs using either MEGAHIT or SPAdes.
+`VPAC-single.py`  Identifies viral contigs with the computationally efficient single-path classifier.
+`VPAC-dual.py`  Identifies viral contigs with the more accurate Evo-enhanced dual-path classifier.
+`Clustering.py`  Groups viral contigs into vOTUs using CD-HIT/MMseqs2 or Skani/PyLeiden.
+`Binning.py`  Bins non-viral contigs into microbial genomes (MAGs) using metaWRAP and dRep.
 
-2. `calculate_edge_features.py`: The second step, this script calculates features for the edges connecting the nodes. It computes phage-phage, host-host, and phage-host edge features based on similarities and homologies. This script must be run in the `GEM-PHI_edges` Conda environment.
+These scripts can be executed independently for modular analysis, or sequentially combined for a complete workflow. The relationship is illustrated below:
 
-3. `final_inference.py`: This is the final step, which loads the pre-trained GEM-PHI model and the calculated node and edge features to predict phage-host interactions. The script outputs a list of predicted interactions and their confidence scores. This script must be run in the `GEM-PHI_inference` Conda environment.
+```sql
+Raw Reads → QC.py → Assembly.py → VPAC-single.py / VPAC-dual.py → Clustering.py → Binning.py ————→ vOTUs and MAGs
+        |
+        └──────────→ end2end.py (automated full pipeline) ————→ vOTUs and MAG
+```
 
-For a complete and automated run of the entire pipeline, use the `run_all.py` script. It orchestrates the execution of the three sub-scripts in their respective Conda environments.
-
-
-### Command Template
-
+In the following sections, we introduce each script with a **Command Template** and a **Results Description**. For simplicity, only the core arguments are shown. For the full list of parameters, run:
 ```bash
-python ./bin/run_all.py \
-  --config_path [path_to_config.yml] \
-  --host_fasta [path_to_host_fasta] \
-  --phage_fasta [path_to_phage_fasta] \
-  --output_dir [output_directory] \
-  --num_workers [number_of_cpu_cores] \
-  --device [device_id]
+python <script>.py -h
 ```
 
 
-### Run Example
+### Automated Run 
 
+`end2end.py`
+
+Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step. The overall workflow is shown as follow:
+[VMP_workflow](VMP_workflow.jpg)
+
+#### Command Template:
 ```bash
-python ./bin/run_all.py \
-  --config_path ./config.yml \
-  --host_fasta ./examples/hosts.fasta \
-  --phage_fasta ./examples/phages.fasta \
-  --output_dir ./outputs/example_run \
-  --num_workers 16 \
-  --device 0
+python end2end.py  --config_path ~/VMP/config.yml  --input ~/VMP/examples/sample.fastq.gz  --output_dir ~/VMP/examples/example_run_outputs
 ```
 
+*For more detailed parameters, run:*
+```bash
+python end2end.py -h
+```
+
+
+#### Results:
+- Clean reads (after QC)
+- Assembled contigs
+- Viral contig predictions (VPAC outputs)
+- Clustered vOTUs
+- MAG bins
+- Summary reports (statistics files and figures)
+
+
+
+
+### Quality Control
+
+`QC.py`
+
+Performs quality control on raw reads, including adapter trimming, quality filtering, host contamination removal, and sequencing complexity assessment.
+
+#### Command Template:
+```bash
+python QC.py --config_path ~/VMP/config.yml --input_reads ~/VMP/examples/sample.fastq.gz --output_dir ~/VMP/examples/example_run_outputs/qc_run
+```
+
+*For more detailed parameters, run:*
+```bash
+python QC.py -h
+```
+
+
+#### Results:
+- Filtered clean reads
+- QC report (Q20, Q30, sequencing depth, k-mer profile, coverage estimation)
+
+
+
+### Assembly
+
+`Assembly.py`
+
+Assembles the cleaned reads into contigs using **MEGAHIT** or **SPAdes** (user selectable).
+
+#### Command Template:
+```bash
+python Assembly.py --config_path ~/VMP/config.yml --input_reads ~/VMP/examples/example_run_outputs/qc_run/clean_reads.fq.gz --assembler megahit  --output_dir ~/VMP/examples/example_run_outputs/assembly_run
+
+```
+
+*For more detailed parameters, run:*
+```bash
+python Assembly.py -h
+```
+
+
+#### Results:
+- Assembled contigs (FASTA)
+- Assembly statistics (number of contigs, N50, average length)
+
+
+
+### Viral Contig Identification
+
+ `VPAC-single.py`
+
+Users can choose one of the eight **VPAC single-path classifiers** to identify viral vs. non-viral contigs. Computationally lightweight and efficient, suitable for large datasets or limited resources.
+
+
+#### Command Template:
+```bash
+python VPAC-single.py --config_path ~/VMP/config.yml --input_contigs ~/VMP/examples/example_run_outputs/assembly_run/contigs.fasta --output_dir ~/VMP/examples/example_run_outputs/vpac_single_run
+```
+
+*For more detailed parameters, run:*
+```bash
+python VPAC-single.py -h
+```
+
+
+#### Results:
+- Viral contig predictions
+- Classification probability scores
+- Summary report
+
+
+
+`VPAC-dual.py`
+
+Runs the **VPAC dual-path classifier**, integrating viral scoring system and Evo-based embeddings for higher accuracy. Requires GPUs with large memory.
+
+#### Command Template:
+```bash
+python VPAC-dual.py --config_path ~/VMP/config.yml --input_contigs ~/VMP/examples/example_run_outputs/assembly_run/contigs.fasta --output_dir ~/VMP/examples/example_run_outputs/vpac_dual_run
+```
+
+*For more detailed parameters, run:*
+```bash
+python VPAC-dual.py -h
+```
+
+#### Results:
+- Viral contig predictions
+- Classification probability scores
+- Summary report
+
+
+
+### Clustering
+
+ `Clustering.py`
+
+Clusters **viral contigs** into vOTUs using either ***CD-HIT + MMseqs2*** or ***Skani + PyLeiden***.
+
+
+#### Command Template:
+```bash
+python Clustering.py --input_viral_contigs ~/VMP/examples/example_run_outputs/vpac_dual_run/viral_contigs.fasta  --output_dir ~/VMP/examples/example_run_outputs/clustering_run```
+```
+
+*For more detailed parameters, run:*
+```bash
+python Clustering.py -h
+```
+
+#### Results:
+- Clustered vOTUs (FASTA + cluster assignments)
+- Redundancy-reduced viral genome sets
+- Summary statistics (cluster sizes, ANI distributions)
+
+
+
+
+### Binning
+
+`Binning.py`
+
+Bins **non-viral contigs** into MAGs using ***metaWRAP*** and dereplication with ***dRep***.
+
+
+#### Command Template:
+```bash
+python Binning.py --input_nonviral_contigs ~/VMP/examples/example_run_outputs/vpac_dual_run/nonviral_contigs.fasta  --output_dir ~/VMP/examples/example_run_outputs/binning_run
+```
+
+*For more detailed parameters, run:*
+```bash
+python Binning.py -h
+```
+
+#### Results:
+- Draft microbial genomes (MAGs)
+- Dereplicated genome sets
+- Binning quality assessment (completeness, contamination)
 
 
 
@@ -170,8 +324,7 @@ python ./bin/run_all.py \
 
 ## Acknowledgments
 
-We acknowledge ***Hefei HiDimension Biotechnology Co., Ltd.*** for providing technical assistance and resources!!! 🥰🤗
-
+We acknowledge ***Hefei HiDimension Biotechnology Co., Ltd.*** for providing technical assistance and resources!!! 🥰
 
 
 
