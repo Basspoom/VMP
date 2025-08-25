@@ -138,7 +138,7 @@ python <script>.py -h
 `end2end.py`
 
 Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step. The overall workflow is shown as follow:
-[VMP_workflow](VMP_workflow.jpg)
+![VMP_workflow](VMP_workflow.jpg)
 
 #### Command Template:
 ```bash
