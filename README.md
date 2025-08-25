@@ -128,7 +128,7 @@ Raw Reads → QC.py → Assembly.py → VPAC_single.py / VPAC_dual.py → Cluste
         └──────────→ end2end.py (automated full pipeline) ————→ vOTUs and MAG
 ```
 
-The overall workflow is shown as follow:
+**The overall workflow is shown as follow :**
 ![VMP workflow](./VMP_workflow.jpg)
 
 
