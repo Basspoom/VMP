@@ -127,6 +127,10 @@ Raw Reads → QC.py → Assembly.py → VPAC_single.py / VPAC_dual.py → Cluste
         └──────────→ end2end.py (automated full pipeline) ————→ vOTUs and MAG
 ```
 
+The overall workflow is shown as follow:
+![VMP workflow](./VMP_workflow.jpg)
+
+
 In the following sections, we introduce each script with a **Command Template** and a **Results Description**. For simplicity, only the core arguments are shown. For the full list of parameters, run:
 ```bash
 python <script>.py -h
@@ -137,8 +141,8 @@ python <script>.py -h
 
 `end2end.py`
 
-Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step. The overall workflow is shown as follow:
-![VMP_workflow](VMP_workflow.jpg)
+Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step. 
+
 
 #### Command Template:
 ```bash
