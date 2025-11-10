@@ -77,9 +77,9 @@ The VMP relies on several external databases and pre-trained models. Please make
 4. **Clustering**: No external databases required.
 5. **Binning**: No external databases required.
 
-Users can run the script under the `VMP/database/` directory to automatically download and configure all required databases:
+Users can run the script under the `VMP/dependency/` directory to automatically download and configure all required files:
 ```bash
-cd VMP/database
+cd VMP/dependency
 python prepare_database.py -db all
 ```
 
@@ -93,13 +93,13 @@ This script will fetch and set up all dependencies listed above.
 If available, the script can use `aria2c` for parallel accelerated downloading (no root required):
 ```bash
 conda install -c conda-forge aria2
-python prepare_database.py -db all --aria2
+python prepare_database.py -db all -aria2
 ```
 
 **Optional:**   Remove compressed packages after installation
 Add the `-clean` flag:
 ```bash
-python prepare_database.py -db all --aria2 -clean
+python prepare_database.py -db all -aria2 -clean
 ```
 
 If some databases were already downloaded, users can specify only the missing ones. For example:
