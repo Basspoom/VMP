@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Callable
 
 DEP_DIR = Path.cwd()
 DB_DIR = DEP_DIR / "databases"
@@ -90,7 +90,7 @@ def wget_cmd(url: str, out_name: str) -> List[str]:
     # Show only progress bar; suppress other noise
     return ["wget", "-q", "--show-progress", "--progress=bar:force:noscroll", "-c", url, "-O", out_name]
 
-def pick_downloader(use_aria2: bool) -> callable:
+def pick_downloader(use_aria2: bool) -> Callable[[str, str], List[str]]:
     if use_aria2 and shutil.which("aria2c") is not None:
         def _cmd(url: str, out_name: str) -> List[str]:
             return aria2_cmd(url, out_name)
@@ -100,7 +100,7 @@ def pick_downloader(use_aria2: bool) -> callable:
         return wget_cmd(url, out_name)
     return _cmd
 
-def prepare_one(name: str, clean: bool, dl_cmd_builder: callable) -> Tuple[str, Path]:
+def prepare_one(name: str, clean: bool, dl_cmd_builder: Callable[[str, str], List[str]]) -> Tuple[str, Path]:
     task = TASKS[name]
     kind, url, archive, target_dirname = task["kind"], task["url"], task["archive"], task["target_dir"]
     root = CATEGORY_DIR[kind]
@@ -115,10 +115,11 @@ def prepare_one(name: str, clean: bool, dl_cmd_builder: callable) -> Tuple[str, 
         return (name, final_dir.resolve())
 
     if name == "VirSorter2":
+        # Force wget for OSF to handle complex redirects reliably
         tmp = root / "download"
         if tmp.exists():
             tmp.unlink()
-        run_cmd(dl_cmd_builder(url, "download"), cwd=root)
+        run_cmd(wget_cmd(url, "download"), cwd=root)  # <--- force wget here
         if archive_path.exists():
             archive_path.unlink()
         tmp.rename(archive_path)
@@ -157,8 +158,8 @@ def main():
             "Examples:\n"
             "  python prepare_database.py -db all\n"
             "  python prepare_database.py -db VirSorter2,CheckV,VPAC -clean\n"
-            "  python prepare_database.py -db all --aria2\n"
-            "  python prepare_database.py -db geNomad --no-aria2\n"
+            "  python prepare_database.py -db all -aria2\n"
+            "  python prepare_database.py -db geNomad -no-aria2\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -206,19 +207,8 @@ def main():
     args = parser.parse_args()
 
     assert_cwd_structure()
-    # tar and unzip are always required; downloader depends on args
+    # tar and unzip are always required
     require_binaries(["tar", "unzip"])
-    if args.aria2 is None:
-        # Auto: use aria2c if present
-        use_aria2 = shutil.which("aria2c") is not None
-    else:
-        use_aria2 = args.aria2 and (shutil.which("aria2c") is not None)
-        if args.aria2 and not use_aria2:
-            print("  aria2c requested but not found; falling back to wget.")
-
-    dl_cmd_builder = pick_downloader(use_aria2)
-    if not use_aria2:
-        require_binaries(["wget"])
 
     keys = list(TASKS.keys())
     if args.db.lower() == "all":
@@ -233,6 +223,21 @@ def main():
             else:
                 print(f"Unknown component: {x}")
                 sys.exit(1)
+
+    # Decide downloader (global), but ensure wget is present if VirSorter2 is requested
+    if args.aria2 is None:
+        use_aria2 = shutil.which("aria2c") is not None
+    else:
+        use_aria2 = args.aria2 and (shutil.which("aria2c") is not None)
+        if args.aria2 and not use_aria2:
+            print("  aria2c requested but not found; falling back to wget.")
+
+    dl_cmd_builder = pick_downloader(use_aria2)
+    if not use_aria2:
+        require_binaries(["wget"])
+    # VirSorter2 always needs wget, regardless of aria2 setting
+    if "VirSorter2" in sel:
+        require_binaries(["wget"])
 
     results = []
     for name in sel:
