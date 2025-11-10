@@ -89,14 +89,14 @@ This script will fetch and set up all dependencies listed above.
 - Typically, users only need to run this step once before the first use.
 
 
-**Optional**   Enable Faster Downloading with aria2c
+**Optional:**   Enable Faster Downloading with aria2c
 If available, the script can use `aria2c` for parallel accelerated downloading (no root required):
 ```bash
 conda install -c conda-forge aria2
 python prepare_database.py -db all --aria2
 ```
 
-**Optional**   Remove compressed packages after installation
+**Optional:**   Remove compressed packages after installation
 Add the `-clean` flag:
 ```bash
 python prepare_database.py -db all --aria2 -clean
