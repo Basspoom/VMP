@@ -1,4 +1,4 @@
-name: metawrap-env
+name: Binning
 channels:
   - ursky
   - https://mirrors.ustc.edu.cn/anaconda/cloud/bioconda
