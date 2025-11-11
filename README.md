@@ -15,7 +15,8 @@
   - [Installation](#installation)
     - [Clone the source code](#clone-the-source-code)
     - [Create the conda environment](#create-the-conda-environment)
-    - [Prepare required databases, VPAC models and the config file](#prepare-required-databases-VPAC-models-and-the-config-file)
+    - [Prepare required databases, tools and models](#prepare-required-databases-tools-and-models)
+    - [Prepare the config file](#prepare-the-config-file)
   - [Quick Start](#quick-start)
     - [Automated Run](#automated-run)
     - [Quality Control](#quality-control)
@@ -82,7 +83,7 @@ The VMP relies on several external databases, several tools, and pre-trained mod
 4. **Clustering**: No external databases required.
 5. **Binning**: No external databases required.
 
-Users can run the script under the `VMP/dependency/` directory to automatically download and configure all required files:
+**Users can run the script under the `VMP/dependency/` directory to automatically download and configure all required files:**
 ```bash
 cd VMP/dependency
 python prepare_database.py -db all
