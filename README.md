@@ -104,7 +104,7 @@ python prepare_database.py -db all -aria2 -clean
 
 If some databases were already downloaded, users can specify only the missing ones. For example:
 ```bash
-python prepare_database.py -db VirSorter2,CheckV,geNomad --aria2
+python prepare_database.py -db VirSorter2,CheckV,geNomad -aria2
 ```
 
 After downloading, update the paths of databases in your VMP/config.yml file to ensure VMP can properly locate these databases and models, for example:
