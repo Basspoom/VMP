@@ -66,7 +66,7 @@ conda env create -f environments/Binning.yml -n Binning
 
 The VMP relies on several external databases and pre-trained models. Please make sure to download and configure them before the first run. The dependencies of each module are summarized below:
 
-1. **Quality Control**: Host decontamination database (e.g., human reference genome hg38).
+1. **Quality Control**: Host decontamination database (e.g., human reference genome hg38: http://igenomes.illumina.com.s3-website-us-east-1.amazonaws.com/Homo_sapiens/UCSC/hg38/Homo_sapiens_UCSC_hg38.tar.gz).
 2. **Assembly**: No external databases required.
 3. **Viral Contig Identification**: 
  - VIBRANT database: https://github.com/AnantharamanLab/VIBRANT/blob/master/
@@ -365,4 +365,4 @@ We acknowledge ***Hefei HiDimension Biotechnology Co., Ltd.*** for providing tec
 
 We are honored to help you if you have any questions. Please feel free to open an issue or contact us directly. Hope our code helps and look forward to your citations.
 
-[zcz@ustc.edu.cn] | [basspoom@mail.ustc.edu.cn] | [zhr123456@mail.ustc.edu.cn].
+[basspoom@mail.ustc.edu.cn] | [zhr123456@mail.ustc.edu.cn].
