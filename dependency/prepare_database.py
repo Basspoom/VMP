@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import argparse
 import os
 import shutil
@@ -15,7 +12,6 @@ TOOL_DIR = DEP_DIR / "tools"
 MODEL_DIR = DEP_DIR / "models"
 
 def run_cmd(cmd: List[str], cwd: Path | None = None) -> None:
-    # Concise echo so users know what's happening
     print("  >", " ".join(cmd))
     proc = subprocess.run(cmd, cwd=str(cwd) if cwd else None)
     if proc.returncode != 0:
@@ -29,10 +25,10 @@ def snapshot_dirs(root: Path) -> set:
 
 def extract_and_get_new_dir(archive_path: Path, target_root: Path) -> List[Path]:
     before = snapshot_dirs(target_root)
-    # Quiet extraction: no verbose file listing
-    if archive_path.suffix in [".gz", ".tgz", ".tar"]:
+    suffix = archive_path.suffix.lower()
+    if suffix in [".gz", ".tgz", ".tar"]:
         run_cmd(["tar", "-xzf", archive_path.name], cwd=target_root)
-    elif archive_path.suffix == ".zip":
+    elif suffix == ".zip":
         run_cmd(["unzip", "-q", "-o", archive_path.name], cwd=target_root)
     else:
         raise ValueError(f"Unsupported archive format: {archive_path}")
@@ -58,6 +54,43 @@ def require_binaries(bins: List[str]) -> None:
 def assert_cwd_structure():
     ensure_dir(DB_DIR); ensure_dir(TOOL_DIR); ensure_dir(MODEL_DIR)
 
+def list_children(p: Path) -> List[Path]:
+    return [c for c in p.iterdir() if c.name not in (".DS_Store",)]
+
+def flatten_if_wrapped(final_dir: Path, max_depth: int = 6) -> None:
+    depth = 0
+    while depth < max_depth:
+        depth += 1
+        children = list_children(final_dir)
+        if not children:
+            return
+        if any(ch.is_file() for ch in children):
+            return
+        if len(children) != 1 or not children[0].is_dir():
+            return
+        inner = children[0]
+        inner_children = list_children(inner)
+        for c in inner_children:
+            shutil.move(str(c), str(final_dir))
+        try:
+            inner.rmdir()
+        except Exception:
+            return
+
+def move_dirs_into(final_dir: Path, new_dirs: List[Path]) -> None:
+    ensure_dir(final_dir)
+    for d in new_dirs:
+        if d.is_dir():
+            for c in list_children(d):
+                shutil.move(str(c), str(final_dir))
+            try:
+                d.rmdir()
+            except Exception:
+                pass
+        else:
+            shutil.move(str(d), str(final_dir))
+    flatten_if_wrapped(final_dir)
+
 TASKS: Dict[str, Dict[str, str]] = {
     "VirSorter2": {"kind": "db", "url": "https://osf.io/v46sc/download", "archive": "VirSorter2.tgz", "target_dir": "VirSorter2_db"},
     "CheckV": {"kind": "db", "url": "https://zenodo.org/records/14033148/files/checkv1.5.tar.gz", "archive": "checkv1.5.tar.gz", "target_dir": "CheckV_db"},
@@ -71,7 +104,6 @@ TASKS: Dict[str, Dict[str, str]] = {
 CATEGORY_DIR = {"db": DB_DIR, "tool": TOOL_DIR, "model": MODEL_DIR}
 
 def aria2_cmd(url: str, out_name: str) -> List[str]:
-    # aria2c concise progress; resume; parallel; no auto-renaming
     return [
         "aria2c",
         "-c",
@@ -87,7 +119,6 @@ def aria2_cmd(url: str, out_name: str) -> List[str]:
     ]
 
 def wget_cmd(url: str, out_name: str) -> List[str]:
-    # Show only progress bar; suppress other noise
     return ["wget", "-q", "--show-progress", "--progress=bar:force:noscroll", "-c", url, "-O", out_name]
 
 def pick_downloader(use_aria2: bool) -> Callable[[str, str], List[str]]:
@@ -95,7 +126,6 @@ def pick_downloader(use_aria2: bool) -> Callable[[str, str], List[str]]:
         def _cmd(url: str, out_name: str) -> List[str]:
             return aria2_cmd(url, out_name)
         return _cmd
-    # fallback to wget
     def _cmd(url: str, out_name: str) -> List[str]:
         return wget_cmd(url, out_name)
     return _cmd
@@ -115,11 +145,10 @@ def prepare_one(name: str, clean: bool, dl_cmd_builder: Callable[[str, str], Lis
         return (name, final_dir.resolve())
 
     if name == "VirSorter2":
-        # Force wget for OSF to handle complex redirects reliably
         tmp = root / "download"
         if tmp.exists():
             tmp.unlink()
-        run_cmd(wget_cmd(url, "download"), cwd=root)  # <--- force wget here
+        run_cmd(wget_cmd(url, "download"), cwd=root)
         if archive_path.exists():
             archive_path.unlink()
         tmp.rename(archive_path)
@@ -132,19 +161,24 @@ def prepare_one(name: str, clean: bool, dl_cmd_builder: Callable[[str, str], Lis
         src = root / "db"
         if not src.exists() and len(new_dirs) == 1:
             src = new_dirs[0]
-        final_dir = safe_rename_to(src, target_dirname)
-    else:
-        if len(new_dirs) == 1:
-            final_dir = safe_rename_to(new_dirs[0], target_dirname)
-        else:
+        if src.exists() and src.is_dir():
             ensure_dir(final_dir)
-            for d in new_dirs:
-                shutil.move(str(d), str(final_dir))
+            for c in list_children(src):
+                shutil.move(str(c), str(final_dir))
+            try:
+                src.rmdir()
+            except Exception:
+                pass
+        else:
+            move_dirs_into(final_dir, new_dirs)
+        flatten_if_wrapped(final_dir)
+    else:
+        move_dirs_into(final_dir, new_dirs)
 
     if clean and archive_path.exists():
         try:
             archive_path.unlink()
-        except:
+        except Exception:
             pass
 
     print(f"  Done -> {final_dir.resolve()}")
@@ -202,12 +236,11 @@ def main():
         action="store_false",
         help="Do not use aria2c; use wget."
     )
-    parser.set_defaults(aria2=None)  # Auto-detect if not specified
+    parser.set_defaults(aria2=None) 
 
     args = parser.parse_args()
 
     assert_cwd_structure()
-    # tar and unzip are always required
     require_binaries(["tar", "unzip"])
 
     keys = list(TASKS.keys())
@@ -224,7 +257,6 @@ def main():
                 print(f"Unknown component: {x}")
                 sys.exit(1)
 
-    # Decide downloader (global), but ensure wget is present if VirSorter2 is requested
     if args.aria2 is None:
         use_aria2 = shutil.which("aria2c") is not None
     else:
@@ -235,7 +267,6 @@ def main():
     dl_cmd_builder = pick_downloader(use_aria2)
     if not use_aria2:
         require_binaries(["wget"])
-    # VirSorter2 always needs wget, regardless of aria2 setting
     if "VirSorter2" in sel:
         require_binaries(["wget"])
 
