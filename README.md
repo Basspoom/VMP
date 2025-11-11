@@ -211,15 +211,13 @@ Performs quality control on raw reads, including adapter trimming, quality filte
 
 #### Command Template:
 ```bash
-conda activate VMP
-python QC.py --config_path ~/VMP/config.yml --input_reads ~/VMP/examples/sample.fastq.gz --output_dir ~/VMP/examples/example_run_outputs/qc_run
+python ~/VMP/bin/QC.py -cf ~/VMP/config.yml -r ~/VMP/examples/ --output_dir ~/VMP/try -p 80
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python QC.py -h
+python ~/VMP/bin/QC.py -h
 ```
-
 
 #### Results:
 - Filtered clean reads
