@@ -84,8 +84,8 @@ python prepare_database.py -db all
 ```
 
 This script will fetch and set up all dependencies listed above.
-- Estimated time: ~ xxx hours (depending on your network bandwidth).
-- Disk space required: ~ xxx GB.
+- Estimated time: ~ 5 hours (depending on your network bandwidth).
+- Disk space required: ~ 110 GB.
 - Typically, users only need to run this step once before the first use.
 
 
