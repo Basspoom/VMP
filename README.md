@@ -211,11 +211,13 @@ Performs quality control on raw reads, including adapter trimming, quality filte
 
 #### Command Template:
 ```bash
+conda activate Your_VMP_env
 python ~/VMP/bin/QC.py -cf ~/VMP/config.yml -r ~/VMP/examples/ --output_dir ~/VMP/try -p 80
 ```
 
 *For more detailed parameters, run:*
 ```bash
+conda activate Your_VMP_env
 python ~/VMP/bin/QC.py -h
 ```
 
@@ -234,16 +236,19 @@ Assembles the cleaned reads into contigs using **MEGAHIT** or **SPAdes** (user s
 
 #### Command Template:
 ```bash
-conda activate VMP
-python Assembly.py --config_path ~/VMP/config.yml --input_reads ~/VMP/examples/example_run_outputs/qc_run/clean_reads.fq.gz --assembler megahit  --output_dir ~/VMP/examples/example_run_outputs/assembly_run
+conda activate Your_VMP_env
+# MEGAHIT
+python ~/VMP/bin/Assembly.py -cf ~/VMP/config.yml -r ~/xxx/Clean_reads/ -out ~/xxx/contigs -p 80 --tool megahit 
+# SPAdes
+python ~/VMP/bin/Assembly.py -cf ~/VMP/config.yml -r ~/xxx/Clean_reads/ -out ~/xxx/contigs -p 80 --tool spades --metaviral --spades-memory 500 
 
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python Assembly.py -h
+conda activate Your_VMP_env
+python ~/VMP/bin/Assembly.py -h
 ```
-
 
 #### Results:
 - Assembled contigs (FASTA)
@@ -261,36 +266,40 @@ Users can choose one of the eight **VPAC single-path classifiers** to identify v
 
 #### Command Template:
 ```bash
-conda activate VPAC-single
-python VPAC-single.py --config_path ~/VMP/config.yml --input_contigs ~/VMP/examples/example_run_outputs/assembly_run/contigs.fasta --output_dir ~/VMP/examples/example_run_outputs/vpac_single_run
+conda activate Your_VPAC-single_env
+python ~/VMP/bin/VPAC-single.py -cf ~/VMP/config.yml -i ~/xxx/raw_contigs/ -o ~/xxx/out_contigs -t 80 -lmin 3000 -lmax 100000  --parallel 1 -m FNN
+(You can choose model one of: CNN, FNN, GB, KAN, RF, SVC, VAE, AE)
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python VPAC-single.py -h
+conda activate Your_VPAC-single_env
+python ~/VMP/bin/VPAC-single.py -h
 ```
-
 
 #### Results:
 - Viral contig predictions
 - Classification probability scores
 - Summary report
+
 
 
 
 `VPAC-dual.py`
 
 Runs the **VPAC dual-path classifier**, integrating viral scoring system and Evo-based embeddings for higher accuracy. Requires GPUs with large memory.
+**You must run `VPAC-single.py` before `VPAC-dual.py`, and their output directories must remain consistent.**
 
-#### Command Template:
+### Command Template:
 ```bash
-conda activate VPAC-dual
-python VPAC-dual.py --config_path ~/VMP/config.yml --input_contigs ~/VMP/examples/example_run_outputs/assembly_run/contigs.fasta --output_dir ~/VMP/examples/example_run_outputs/vpac_dual_run
+conda activate Your_VPAC-dual_env
+python ~/VMP/bin/VPAC-dual.py -i ~/xxx/raw_contigs/ -o ~/xxx/out_contigs -d cuda:0 -cf ~/VMP/config.yml 
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python VPAC-dual.py -h
+conda activate Your_VPAC-dual_env
+python ~/VMP/bin/VPAC-dual.py -h
 ```
 
 #### Results:
@@ -298,6 +307,8 @@ python VPAC-dual.py -h
 - Classification probability scores
 - Summary report
 
+#### Important issue:
+If you encounter `NameError: name 'MHA' is not defined`, it typically means the FlashAttention build matching your Python/Torch/CUDA versions is missing. Activate your VPAC-dual environment (`conda activate Your_VPAC-dual_env`), check versions with conda list, download the correct wheel from the FlashAttention releases page(https://github.com/Dao-AILab/flash-attention/releases), upload it to the server, and install it via pip install `./flash_attn-*.whl`.
 
   
 
