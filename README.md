@@ -268,7 +268,7 @@ Users can choose one of the eight **VPAC single-path classifiers** to identify v
 ```bash
 conda activate Your_VPAC-single_env
 python ~/VMP/bin/VPAC-single.py -cf ~/VMP/config.yml -i ~/xxx/raw_contigs/ -o ~/xxx/out_contigs -t 80 -lmin 3000 -lmax 100000  --parallel 1 -m FNN
-(You can choose model one of: CNN, FNN, GB, KAN, RF, SVC, VAE, AE)
+### You can choose model one of: CNN, FNN, GB, KAN, RF, SVC, VAE, AE
 ```
 
 *For more detailed parameters, run:*
@@ -308,7 +308,7 @@ python ~/VMP/bin/VPAC-dual.py -h
 - Summary report
 
 #### Important issue:
-If you encounter `NameError: name 'MHA' is not defined`, it typically means the FlashAttention build matching your Python/Torch/CUDA versions is missing. Activate your VPAC-dual environment (`conda activate Your_VPAC-dual_env`), check versions with conda list, download the correct wheel from the FlashAttention releases page(https://github.com/Dao-AILab/flash-attention/releases), upload it to the server, and install it via pip install `./flash_attn-*.whl`.
+If you encounter `NameError: name 'MHA' is not defined`, it typically means the FlashAttention build matching your Python/Torch/CUDA versions is missing. Activate your VPAC-dual environment (`conda activate Your_VPAC-dual_env`), check versions with conda list, download the correct wheel from the FlashAttention releases page (https://github.com/Dao-AILab/flash-attention/releases), upload it to the server, and install it via pip install `./flash_attn-*.whl`.
 
   
 
