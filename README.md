@@ -149,7 +149,7 @@ Before run VMP, you should update the paths of the environments, databases, tool
 
 The VMP is composed of seven modular scripts plus one orchestration script for fully automated execution. Each script corresponds to a major step in the virus mining workflow:
 
-- `end2end.py`  Orchestration script. Runs the entire pipeline (QC → Assembly → Viral Identification → Clustering → Binning) starting from raw reads.
+- `VMP_end2end.py`  Orchestration script. Runs the entire pipeline (QC → Assembly → Viral Identification → Clustering → Binning) starting from raw reads.
 - `QC.py`  Performs quality control and host decontamination on raw sequencing reads.
 - `Assembly.py`  Assembles cleaned reads into contigs using either MEGAHIT or SPAdes.
 - `VPAC_single.py`  Identifies viral contigs with the computationally efficient single-path classifier.
@@ -162,7 +162,7 @@ These scripts can be executed independently for modular analysis, or sequentiall
 ```sql
 Raw Reads → QC.py → Assembly.py → VPAC_single.py / VPAC_dual.py → Clustering.py → Binning.py ————→ vOTUs and MAGs
         |
-        └──────────→ end2end.py (automated full pipeline) ————→ vOTUs and MAG
+        └──────────→ VMP_end2end.py (automated full pipeline) ————→ vOTUs and MAG
 ```
 
 **The overall workflow is shown as follow :**
@@ -171,26 +171,34 @@ Raw Reads → QC.py → Assembly.py → VPAC_single.py / VPAC_dual.py → Cluste
 
 In the following sections, we introduce each script with a **Command Template** and a **Results Description**. For simplicity, only the core arguments are shown. For the full list of parameters, run:
 ```bash
-python <script>.py -h
+conda activate your_env
+python ~/VMP/bin/<script>.py -h
 ```
   
 
 ### Automated Run 
 
-`end2end.py`
+`VMP_end2end.py`
 
 Runs the **full pipeline** starting from raw sequencing reads, including quality control, assembly, viral contig identification, clustering, and binning. This script produces viral gemones (vOTUs) and microbial genomes (MAGs) in a single step.
 
 #### Command Template:
 ```bash
-python end2end.py  --config_path ~/VMP/config.yml  --input ~/VMP/examples/sample.fastq.gz  --output_dir ~/VMP/examples/example_run_outputs
+conda activate Your_VMP_env
+python ~/VMP/bin/VMP_end2end.py  -i xx/VMP/examples -o xx/outdir -cf xx/VMP/config.yml --assembly megahit --vpac both --cluster skani_pyleiden
+
+# Two assembly methods you can chose: 'SPAdes' or 'MEGAHIT' (default: SPAdes).
+# Two virus identification methods you can chose:'single' or 'dual' (default: dual).
+# Two clustering methods you can chose: 'CD-hit + MMseqs2' or 'skani + pyLeiden' (default: skani + pyLeiden).
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python end2end.py -h
+conda activate Your_VMP_env
+python ~/VMP/bin/VMP_end2end.py -h
 ```
 
+You can use `--resume (default)` or `--no-resume` to auto-detect completed steps and continue, and use `--from-step {qc|assembly|vpac_single|vpac_dual|clustering}` to override this behavior and start from a specific step!
 
 #### Results:
 - Clean reads (after QC)
@@ -308,7 +316,7 @@ python ~/VMP/bin/VPAC-dual.py -h
 - Summary report
 
 #### Important issue:
-If you encounter `NameError: name 'MHA' is not defined`, it typically means the FlashAttention build matching your Python/Torch/CUDA versions is missing. Activate your VPAC-dual environment (`conda activate Your_VPAC-dual_env`), check versions with conda list, download the correct wheel from the FlashAttention releases page (https://github.com/Dao-AILab/flash-attention/releases), upload it to the server, and install it via pip install `./flash_attn-*.whl`.
+If you encounter `NameError: name 'MHA' is not defined`, it typically means the FlashAttention build matching your Python/Torch/CUDA versions is missing. Activate your VPAC-dual environment (`conda activate Your_VPAC-dual_env`), check versions with conda list, download the correct wheel from the FlashAttention releases page(https://github.com/Dao-AILab/flash-attention/releases), upload it to the server, and install it via pip install `./flash_attn-*.whl`.
 
   
 
@@ -321,13 +329,14 @@ Clusters **viral contigs** into vOTUs using either ***CD-HIT + MMseqs2*** or ***
 
 #### Command Template:
 ```bash
-conda activate VMP
-python Clustering.py --input_viral_contigs ~/VMP/examples/example_run_outputs/vpac_dual_run/viral_contigs.fasta  --output_dir ~/VMP/examples/example_run_outputs/clustering_run```
+conda activate Your_VMP_env
+python ~/VMP/bin/Clustering.py -i ~/xxx/raw_contigs/ -o ~/xxx/out_vOTUs -cf ~/VMP/config.yml  --tool skani_pyleiden --parallel 2 
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python Clustering.py -h
+conda activate Your_VMP_env
+python ~/VMP/bin/Clustering.py -h
 ```
 
 #### Results:
@@ -348,13 +357,14 @@ Bins **non-viral contigs** into MAGs using ***metaWRAP*** and dereplication with
 
 #### Command Template:
 ```bash
-conda activate Binning
-python Binning.py --input_nonviral_contigs ~/VMP/examples/example_run_outputs/vpac_dual_run/nonviral_contigs.fasta  --output_dir ~/VMP/examples/example_run_outputs/binning_run
+conda activate Your_VMP_env
+python ~/VMP/bin/Binning.py -i ~/xxx/raw_contigs/ -o ~/xxx/out_MAGs -cf ~/VMP/config.yml 
 ```
 
 *For more detailed parameters, run:*
 ```bash
-python Binning.py -h
+conda activate Your_VMP_env
+python ~/VMP/bin/Binning.py -h
 ```
 
 #### Results:
