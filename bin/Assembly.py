@@ -14,6 +14,35 @@ from functools import partial
 import re
 from pathlib import Path
 
+def _load_kv_config(cfg_path: str) -> dict:
+    """Load a simple key: value YAML (flat) into a dict, ignoring comments and blanks."""
+    data = {}
+    with open(cfg_path, 'r', encoding='utf-8') as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            if ':' not in line:
+                continue
+            key, val = line.split(':', 1)
+            key = key.strip()
+            val = val.strip()
+            if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
+                val = val[1:-1]
+            if ' #' in val:
+                val = val.split(' #', 1)[0].strip()
+            data[key] = val
+    return data
+
+ENV_PREFIX = None
+ENV_BIN = None
+ENV_RUN_ENVS = None 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.markdown import Markdown
+from rich.rule import Rule
+
 
 def Getfastq_list(raw_data):
     path = raw_data
@@ -36,7 +65,7 @@ def process_sample_megahit(current_fasta, raw_data, assembly_dir, raw_contigs_di
                       f"-2 {os.path.join(raw_data, current_fasta, '*_2.fastq')} " \
                       f"-o {os.path.join(assembly_dir, current_fasta)} --out-prefix {current_fasta} -t {thread}"
     
-        if k_min:
+    if k_min:
         megahit_command += f" --k-min {k_min}"
     if k_max:
         megahit_command += f" --k-max {k_max}"
@@ -54,7 +83,7 @@ def process_sample_megahit(current_fasta, raw_data, assembly_dir, raw_contigs_di
         megahit_command += f" --presets {presets_parameters}"
 
     try:
-        exit_code = subprocess.call(megahit_command, shell=True)
+        exit_code = subprocess.call(megahit_command, shell=True, env=ENV_RUN_ENVS)
         if exit_code != 0:
             print(f"Error occurred during assembly of {current_fasta}. Command: {megahit_command}")
             return
@@ -210,7 +239,7 @@ def process_sample_spades(current_fasta, raw_data, assembly_dir, raw_contigs_dir
         spades_command += f" {additional_params}"
 
     try:
-        exit_code = subprocess.call(spades_command, shell=True)
+        exit_code = subprocess.call(spades_command, shell=True, env=ENV_RUN_ENVS)
         if exit_code != 0:
             print(f"Error occurred during assembly of {current_fasta}. Command: {spades_command}")
             return
@@ -384,67 +413,124 @@ def rename_contig_headers(out_dir):
     
 
 def custom_help():
-    YELLOW = "\033[93m"  # Yellow
-    GREEN = "\033[92m"   # Green
-    BLUE = "\033[94m"    # Blue
-    PURPLE = "\033[95m"  # Purple
-    RED = "\033[91m"     # Red
-    RESET = "\033[0m"    # Reset to default color
+    console = Console()
 
-    print("\n" + RED + "The 'Assembly' script contains two assemble modules, namely MEGAHIT and SPAdes. This script is used for assembly. It can assemble the quality-controlled fastq files to obtain contigs." + RESET)
+    intro = (
+        "The 'Assembly' script provides two assembly modules: MEGAHIT and SPAdes. "
+        "It assembles quality-controlled FASTQ files into contigs and summarizes assembly statistics."
+    )
 
-    print("\n" + PURPLE + "Examples:" + RESET)
-    print("  Assembly  -r /data  -out /results  --tool spades -p 80  --meta  --spades-memory 1024  --cov-cutoff auto")
-    print("  Assembly  -r /data  -out /results  --tool megahit  -p 80  -kmi 21  -kma 141  -ks 10  --min-count 5  --memory 0.8 ")
+    examples_md = Markdown(
+        "\n**Examples:**\n"
+        "```\n"
+        "Assembly  -r /data  -out /results  --tool spades   -p 80  --meta  --spades-memory 1024  --cov-cutoff  auto\n"
+        "Assembly  -r /data  -out /results  --tool megahit  -p 80   -kmi 21  -kma 141  -ks 10  --min-count 5  --memory 0.8\n"
+        "```\n"
+    )
 
-    print("\n" + GREEN + "The -r parameter points to the directory containing the paired-end sequencing FASTQ files (please decompress first), for example:" + RESET)
-    print("  " + BLUE + "/xxxx/Clean_reads/A1/A1_1.fastq" + RESET)
-    print("  " + BLUE + "/xxxx/Clean_reads/A1/A1_2.fastq" + RESET)
-    print("  " + BLUE + "/xxxx/Clean_reads/A2/A2_1.fastq" + RESET)
-    print("  " + BLUE + "/xxxx/Clean_reads/A2/A2_2.fastq" + RESET)
-    print("  ......")
-    print("Therefore, -r should be set to /xxxx/Clean_reads.")
+    reads_md = Markdown(
+        "**Input reads location (-r):** directory that contains per-sample subfolders with decompressed paired-end FASTQ files, e.g.\n"
+        "```\n"
+        "/xxxx/Clean_reads/A1/A1_1.fastq\n"
+        "/xxxx/Clean_reads/A1/A1_2.fastq\n"
+        "/xxxx/Clean_reads/A2/A2_1.fastq\n"
+        "/xxxx/Clean_reads/A2/A2_2.fastq\n"
+        "...\n"
+        "```\n"
+        "Therefore, `-r` should be set to `/xxxx/Clean_reads`.\n"
+    )
 
-    print("\n" + GREEN + "The -out parameter specifies the output directory for quality control and assembly." + RESET)
+    out_md = Markdown(
+        "**Output directory (-out):** the root folder where assembled contigs and reports will be written."
+    )
 
-    print("\n" + BLUE + "  ~/raw_contigs/A1_contigs.fa" + RESET + " & " + BLUE + "~/raw_contigs/A1_contigs.fasta" + RESET + ": Contigs obtained from assembly.")
-    print("  " + BLUE + "~/Assembly/contig_stats_summary.tsv" + RESET + ": Statistics of assembled contigs, including indicators such as num_seqs, sum_len, min_len, avg_len, max_len, and GC(%).")
-    print("  " + BLUE + "~/Assembly/contig_length_distribution.pdf" + RESET + " & " + BLUE + "~/Assembly/contig_length_distribution.png" + RESET + ": Histogram of the length distribution of assembled contigs.")
+    console.print(Panel(intro, border_style="cyan", title="Assembly", title_align="left"))
+    console.print(examples_md)
+    console.print(reads_md)
+    console.print(out_md)
+    console.print()
 
-    print("\n" + GREEN + "Both tools can be analyzed using preset parameters, and users can adjust parameters according to their data needs." + RESET)
+    out_tbl = Table(show_header=True, header_style="bold blue")
+    out_tbl.add_column("Files/Dirs", style="cyan", no_wrap=True)
+    out_tbl.add_column("Description", style="white")
+    out_tbl.add_row("~/raw_contigs/A1_contigs.fa & ~/raw_contigs/A1_contigs.fasta",
+                    "Assembled contigs (per sample).")
+    out_tbl.add_row("~/Assembly/contig_stats_summary.tsv",
+                    "Summary statistics: num_seqs, sum_len, min_len, avg_len, max_len, GC(%).")
+    out_tbl.add_row("~/Assembly/contig_length_distribution.pdf & ~/Assembly/contig_length_distribution.png",
+                    "Histogram of contig length distribution.")
+    console.print(Panel(out_tbl, border_style="blue", title="Outputs", title_align="left"))
+    console.print(Panel("Both tools work out-of-the-box with sensible defaults; tune parameters as needed.",
+                        border_style="cyan"))
+    console.print()
 
+    # ====================== Detailed parameters ===============================
+    console.print("[bold]Detailed parameters[/bold]\n")
 
-    print("\n" + PURPLE + "Detailed parameters")
-    print(" " + GREEN + "=" * 50 + " " + RESET + YELLOW + "Usage & Global parameters" + RESET + " " + GREEN + "=" * 50 + RESET)
+    # --- Usage & Global
+    console.print(Panel("Usage: Assembly [OPTIONS] INPUT OUTPUT",
+                        border_style="cyan", title="Usage & Global parameters", title_align="left"))
 
-    print(YELLOW + "Global parameters:" + RESET)
-    print(f"  {'-r, --raw_data':<40} Directory containing subdirectories for single-sample data.")
-    print(f"  {'-out, --out_dir':<40} Output directory for quality control and assembly.")
-    print(f"  {'-p, --thread':<40} Number of parallel threads (default: 80).")
-    print(f"  {'-m, --min_length':<40} Min length of assembly contigs (Default: 500).")
-    print(f"  {'--tool':<40} Assembly tool to use: 'megahit' or 'spades'.")
-    print(f"  {'--parallel':<40} Number of samples to process in parallel (default: 1).")
+    g_tbl = Table(show_header=False, box=None, pad_edge=False)
+    g_tbl.add_column("Flag", style="bold cyan", no_wrap=True)
+    g_tbl.add_column("Description", style="white")
+    g_tbl.add_row("-cf, --config", "DPath to config.yml for env/tools/dbs.")
+    g_tbl.add_row("-r, --raw_data", "Directory containing per-sample subdirectories of FASTQ files.")
+    g_tbl.add_row("-out, --out_dir", "Output directory for assembly results.")
+    g_tbl.add_row("-p, --thread", "Number of threads (default: 80).")
+    g_tbl.add_row("-m, --min_length", "Minimum contig length to keep (default: 500).")
+    g_tbl.add_row("--tool", "Assembly backend: 'megahit' or 'spades' (required).")
+    g_tbl.add_row("--parallel", "Number of samples to process in parallel (default: 2).")
+    console.print(g_tbl)
+    console.print()
 
-    print("\n" + GREEN + "=" * 51 + " " + RESET + YELLOW + "Assembly Tool Parameters" + RESET + " " + GREEN + "=" * 51 + RESET)
+    # --- MEGAHIT --------------------------------------------------------------
+    console.print(Panel("MEGAHIT Parameters", border_style="magenta"))
+    m_tbl1 = Table(show_header=False, box=None, pad_edge=False)
+    m_tbl1.add_column("Flag", style="bold cyan", no_wrap=True)
+    m_tbl1.add_column("Description", style="white")
+    console.print("[bold]K-mer schedule:[/bold]")
+    m_tbl1.add_row("-kmi, --k_min", "Minimum k-mer size (default: 21).")
+    m_tbl1.add_row("-kma, --k_max", "Maximum k-mer size (default: 141).")
+    m_tbl1.add_row("-ks,  --k_step", "Increment for k-mer sizes (default: 10).")
+    m_tbl1.add_row("--k-list", "Explicit comma-separated k list (e.g., 21,29,39).")
+    console.print(m_tbl1)
 
-    print("\n" + YELLOW + "MEGAHIT Parameters:" + RESET)
-    print(f"  {'-kmi, --k_min':<40} Minimum k-mer size (default: 21).")
-    print(f"  {'-kma, --k_max':<40} Maximum k-mer size (default: 141).")
-    print(f"  {'-ks, --k_step':<40} Increment of k-mer size (default: 10).")
-    print(f"  {'--min-count':<40} Minimum multiplicity for filtering (default: 2).")
-    print(f"  {'--k-list':<40} Comma-separated list of k-mer sizes (e.g. 21,29,39).")
+    m_tbl2 = Table(show_header=False, box=None, pad_edge=False)
+    m_tbl2.add_column("Flag", style="bold cyan", no_wrap=True)
+    m_tbl2.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Graph / memory / presets:[/bold]")
+    m_tbl2.add_row("--min-count", "Minimum k-mer multiplicity for filtering (default: 2).")
+    m_tbl2.add_row("--memory", "Max memory fraction for construction (default: 0.9).")
+    m_tbl2.add_row("--presets", "Override a group of parameters (MEGAHIT presets).")
+    console.print(m_tbl2)
+    console.print()
 
-    print(f"  {'--memory':<40} Max memory for construction (fraction of total memory, default: 0.9).")
-    print(f"  {'--presets':<40} Override a group of parameters.")
+    # --- SPAdes ---------------------------------------------------------------
+    console.print(Panel("SPAdes Parameters", border_style="green"))
+    s_tbl1 = Table(show_header=False, box=None, pad_edge=False)
+    s_tbl1.add_column("Flag", style="bold cyan", no_wrap=True)
+    s_tbl1.add_column("Description", style="white")
+    console.print("[bold]Core settings:[/bold]")
+    s_tbl1.add_row("--spades-memory", "RAM limit in GB (default: 250).")
+    s_tbl1.add_row("--k-sizes", "Odd k-mer sizes < 128 (comma-separated).")
+    s_tbl1.add_row("--cov-cutoff", "Coverage cutoff (float), or 'auto' / 'off'.")
+    console.print(s_tbl1)
 
-    print("\n" + YELLOW + "SPAdes Parameters:" + RESET)
-    print(f"  {'--spades-memory':<40} RAM limit for SPAdes in Gb (default: 250).")
-    print(f"  {'--k-sizes':<40} List of k-mer sizes (must be odd and less than 128).")
-    print(f"  {'--cov-cutoff':<40} Coverage cutoff value (positive float, 'auto', or 'off').")
-    print(f"  {'--meta':<40} Use this flag for metagenomic data.")
-    print(f"  {'--metaviral':<40} Run metaviralSPAdes pipeline for virus detection.")
-    print(f"  {'--rnaviral':<40} Enable virus assembly module from RNA-Seq data.")
-    print(f"  {'--spades-params':<40} Additional SPAdes parameters as a single string.")
+    s_tbl2 = Table(show_header=False, box=None, pad_edge=False)
+    s_tbl2.add_column("Flag", style="bold cyan", no_wrap=True)
+    s_tbl2.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Pipelines / extras:[/bold]")
+    s_tbl2.add_row("--meta", "Use metagenomic mode.")
+    s_tbl2.add_row("--metaviral", "Run metaviralSPAdes for virus detection.")
+    s_tbl2.add_row("--rnaviral", "RNA virus assembly from RNA-Seq data.")
+    s_tbl2.add_row("--spades-params", "Additional SPAdes parameters (single string).")
+    console.print(s_tbl2)
+
+    console.print()
+    console.print(Rule(style="dim"))
 
 
 
@@ -454,36 +540,51 @@ class CustomArgumentParser(argparse.ArgumentParser):
         self.exit()
 
 def main():
-    parser = CustomArgumentParser(description="Upstream of metagenomics (quality control and contigs assembly).")
-    parser.add_argument("--parallel", type=int, default=2, help="Number of samples to process in parallel (default: 1)")
-
-    # Basic parameters
-    parser.add_argument("-r", "--raw_data", type=str, required=True, help="Directory containing subdirectories for single-sample data.")
-    parser.add_argument("-out", "--out_dir", type=str, required=True, help="Output directory for quality control and assembly.")
-    parser.add_argument("-p", "--thread", type=int, default=80, help="Number of parallel threads (default: 80)")
-    parser.add_argument("-m", "--min_length", type=int, default=500, help="Min length of assembly contigs (Default: 500)")
-    parser.add_argument("--tool", choices=['megahit', 'spades'], required=True, help="Assembly tool to use: 'megahit' or 'spades'.")
-
-    # megahit parameters
-    parser.add_argument("-kmi", "--k_min", type=int, default=21, help="Minimum k-mer size (Default: 21)")
-    parser.add_argument("-kma", "--k_max", type=int, default=141, help="Maximum k-mer size (Default: 141)")
-    parser.add_argument("-ks", "--k_step", type=int, default=10, help="Increment of k-mer size (Default: 10)")
-    parser.add_argument("--min-count", type=int, default=2, help="Minimum multiplicity for filtering (Default: 2)")
-    parser.add_argument("--k-list", type=str, help="Comma-separated list of k-mer sizes (e.g. 21,29,39)")
-    parser.add_argument("--memory", type=float, default=0.9, help="Max memory for construction (fraction of total memory, Default: 0.9)")
-    parser.add_argument("--presets", type=str, help="Override a group of parameters.")
-
-    # SPAdes parameters
-    parser.add_argument("--spades-memory", type=int, default=250, help="RAM limit for SPAdes in Gb (default: 250)")
-    parser.add_argument("--k-sizes", type=str, help="List of k-mer sizes (must be odd and less than 128, e.g. '21,33,55')")
-    parser.add_argument("--cov-cutoff", type=float, help="Coverage cutoff value (a positive float number, or 'auto', or 'off')")
-    parser.add_argument("--meta", action='store_true', help="Use this flag for metagenomic data.")
-    parser.add_argument("--metaviral", action='store_true', help="Run metaviralSPAdes pipeline for virus detection.")
-    parser.add_argument("--rnaviral", action='store_true', help="Enable virus assembly module from RNA-Seq data.")
-    parser.add_argument("--spades-params", type=str, help="Additional SPAdes parameters as a single string (e.g. --careful --only-assembler).")
-
-
+    parser = CustomArgumentParser(description="Metagenomic assembly of paired-end reads into contigs using MEGAHIT or SPAdes, with summary statistics.")
+    parser.add_argument('-cf','--config', type=str, help='Path to config.yml for env/tools/dbs')
+    parser.add_argument("--parallel", type=int, default=2)
+    parser.add_argument("-r", "--raw_data", type=str, required=True)
+    parser.add_argument("-out", "--out_dir", type=str, required=True)
+    parser.add_argument("-p", "--thread", type=int, default=80)
+    parser.add_argument("-m", "--min_length", type=int, default=500)
+    parser.add_argument("--tool", choices=['megahit', 'spades'], required=True)
+    parser.add_argument("-kmi", "--k_min", type=int, default=21)
+    parser.add_argument("-kma", "--k_max", type=int, default=141)
+    parser.add_argument("-ks", "--k_step", type=int, default=10)
+    parser.add_argument("--min-count", type=int, default=2)
+    parser.add_argument("--k-list", type=str)
+    parser.add_argument("--memory", type=float, default=0.9)
+    parser.add_argument("--presets", type=str)
+    parser.add_argument("--spades-memory", type=int, default=250)
+    parser.add_argument("--k-sizes", type=str)
+    parser.add_argument("--cov-cutoff", type=float)
+    parser.add_argument("--meta", action='store_true')
+    parser.add_argument("--metaviral", action='store_true')
+    parser.add_argument("--rnaviral", action='store_true')
+    parser.add_argument("--spades-params", type=str)
     args = parser.parse_args()
+
+
+    if args.config:
+        cfg = _load_kv_config(args.config)
+        vmp_env = cfg.get('VMP_env')
+        if not vmp_env:
+            raise SystemExit("[Assembly] config.yml missing 'VMP_env' key")
+
+        global ENV_PREFIX, ENV_BIN, ENV_RUN_ENVS
+        ENV_PREFIX = vmp_env.rstrip('/')
+        ENV_BIN = os.path.join(ENV_PREFIX, 'bin')
+
+        if not os.path.isdir(ENV_BIN):
+            raise SystemExit(f"[Assembly] ENV bin not found: {ENV_BIN}")
+
+        ENV_RUN_ENVS = os.environ.copy()
+        ENV_RUN_ENVS['PATH'] = ENV_BIN + os.pathsep + ENV_RUN_ENVS.get('PATH', '')
+
+
+    else:
+
+        raise SystemExit("[Assembly] Please provide --config to point to config.yml containing VMP_env")
 
     fastq_list = Getfastq_list(args.raw_data)
 

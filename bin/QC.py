@@ -3,9 +3,16 @@ import subprocess
 import pandas as pd
 import json
 import argparse
+import yaml
 import shlex
 import shutil
-# from termcolor import colored
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.rule import Rule
+from rich.text import Text
+from rich.markdown import Markdown
+
 
 def Getfastq_list(raw_data):
     path = raw_data
@@ -50,23 +57,10 @@ def fastp(out_dir, raw_data, fastq_list, qualified_quality, unqualified_percent,
         fastp_command += f" -h {os.path.join(sample_dir, f'{current_fasta}_fastp.html')} -j {os.path.join(sample_dir, f'{current_fasta}_fastp.json')}"
 
         os.system(fastp_command)
-        # print(f"Sample {current_fasta} has completed quality control.")
 
         stat_unpaired_reads(os.path.join(sample_dir, f'{current_fasta}_trim-unpaired_R1.fastq.gz'), current_fasta, sample_dir)
         stat_unpaired_reads(os.path.join(sample_dir, f'{current_fasta}_trim-unpaired_R2.fastq.gz'), current_fasta, sample_dir)
-
         generate_fastp_summary(os.path.join(sample_dir, f'{current_fasta}_fastp.json'), current_fasta, sample_dir)
-
-        # # FastQC
-        # origin_quality_dir = os.path.join(sample_dir, "origin_quality")
-        # filtered_quality_dir = os.path.join(sample_dir, "filtered_quality")
-        # os.makedirs(origin_quality_dir, exist_ok=True)
-        # os.makedirs(filtered_quality_dir, exist_ok=True)
-        # ##### quality evaluation
-        # fastqc_filtered_command = f"fastqc -t {thread} {os.path.join(sample_dir, '*.fastq.gz')} -o {filtered_quality_dir}"
-        # fastqc_orgin_command = f"fastqc -t {thread} {os.path.join(raw_data, current_fasta, f'*.fastq')} -o {origin_quality_dir}"
-        # os.system(fastqc_filtered_command)
-        # os.system(fastqc_orgin_command)
 
         print(f"Sample {current_fasta} has completed quality control.")
 
@@ -143,18 +137,10 @@ def rm_host(out_dir, fastq_list, genome_fasta, genome_index, thread, raw_data):
 
         bowtie2_command = f"bowtie2 -x {genome_index} -p {thread} -1 {os.path.join(sample_dir2, f'{current_fasta}_trim_R1.fastq.gz')} -2 {os.path.join(sample_dir2, f'{current_fasta}_trim_R2.fastq.gz')} -S {os.path.join(sample_dir, f'{current_fasta}_host_mapped.sam')}"
 
-        # Convert SAM to BAM    
-        # samtools view -@ 80 -bSh /opt/user/basspoom/QC_new/Up-stream/rm_host/A1/A1_host_mapped.sam > /opt/user/basspoom/QC_new/Up-stream/rm_host/A1/A1_host_mapped.bam
-        # samtools view -@ 80 -bSh "/opt/user/basspoom/QC_new/Up-stream/rm_host/A1/A1_host_mapped.sam" > "/opt/user/basspoom/QC_new/Up-stream/rm_host/A1/A1_host_mapped.bam"
-
         samtools_command1 = f"samtools view -@ {thread} -bSh {os.path.join(sample_dir, f'{current_fasta}_host_mapped.sam')} > {os.path.join(sample_dir, f'{current_fasta}_host_mapped.bam')}"
-
         samtools_command2 = f"samtools sort -@ {thread}  {os.path.join(sample_dir, f'{current_fasta}_host_mapped.bam')}  -o {os.path.join(sample_dir, f'{current_fasta}_host_mapped.sorted.bam')}"
-
         samtools_command3 = f"samtools view -@ {thread}  -b  -f 12  -F 256  {os.path.join(sample_dir, f'{current_fasta}_host_mapped.sorted.bam')} > {os.path.join(sample_dir, f'{current_fasta}_host_unmapped.bam')}"
-
         samtools_command4 = f"samtools sort  -O BAM  -@ {thread} -n {os.path.join(sample_dir, f'{current_fasta}_host_unmapped.bam')} -o {os.path.join(sample_dir, f'{current_fasta}_host_unmapped_sorted.bam')}"
-
         samtools_command5 = f"samtools fastq -@ {thread}  {os.path.join(sample_dir, f'{current_fasta}_host_unmapped_sorted.bam')}  -1 {os.path.join(sample_dir, f'{current_fasta}_host_removed_1.fastq')}  -2 {os.path.join(sample_dir, f'{current_fasta}_host_removed_2.fastq')}  -n"
 
         try:
@@ -300,7 +286,11 @@ def KMC(out_dir, fastq_list, thread, kmer_l, min_kmer_coverage, max_kmer_coverag
 
     rm_host_dir = os.path.join(out_dir, 'rm_host')
 
-    genomescope_path = subprocess.check_output("whereis genomescope.R | awk '{print $2}'", shell=True).decode().strip()
+    genomescope_dir = (CONFIG.get('genomescope2.0') if 'CONFIG' in globals() else None)
+    if genomescope_dir:
+        genomescope_path = os.path.join(str(genomescope_dir).strip().strip('\'\"'), 'genomescope.R')
+    else:
+        genomescope_path = subprocess.check_output("whereis genomescope.R | awk '{print $2}'", shell=True).decode().strip()
 
     for current_fasta in fastq_list:
         sample_dir = os.path.join(kmc_dir, current_fasta)
@@ -366,131 +356,253 @@ def KMC(out_dir, fastq_list, thread, kmer_l, min_kmer_coverage, max_kmer_coverag
 
 
 
+
 def custom_help():
-    YELLOW = "\033[93m"  # Yellow
-    GREEN = "\033[92m"   # Green
-    BLUE = "\033[94m"    # Blue
-    PURPLE = "\033[95m"  # Purple
-    RED = "\033[91m"     # Red
-    RESET = "\033[0m"    # Reset to default color
+    console = Console()
 
-    print("\n" + RED + "The 'Quality_control' script includes four functional modules: quality control of sequencing data, removal of host sequences, redundancy & distribution statistics, and k-mer frequency statistics & genome feature assessment. This script can be used for preliminary cleaning and evaluation of sequencing data." + RESET)
+    intro = (
+        "The 'Quality_control' script includes four functional modules: "
+        "quality control of sequencing data, removal of host sequences, "
+        "redundancy & distribution statistics, and k-mer frequency statistics & "
+        "genome feature assessment. This script can be used for preliminary "
+        "cleaning and evaluation of sequencing data."
+    )
 
-    print("\n" + PURPLE + "Examples:" + RESET)
-    print("  Quality_control  -r /data  -out /results  -gi /hg38  -T_nnp kmer  -n 2048  -v 8  -kl 24  -m 66  -ci 1  -cs 256  -cx 10000 -min_freq 10  -max_freq 500")
-    print("  Quality_control  -r /data  -out /results  -p 80")
+    examples_md = Markdown(
+        "\n**Examples:**\n"
+        "```\n"
+        "Quality_control  -r /data  -out /results  -gi /hg38  -T_nnp kmer  -n 2048  -v 8  -kl 24  -m 66  -ci 1  -cs 256  -cx 10000 -min_freq 10  -max_freq 500\n"
+        "Quality_control  -r /data  -out /results  -p 80\n"
+        "```\n"
+    )
 
-    print("\n" + GREEN + "The -r parameter points to the directory containing the paired-end sequencing FASTQ files (please decompress first), for example:" + RESET)
-    print("  " + BLUE + "/xxxx/raw_data/A1/A1_1.fastq" + RESET)
-    print("  " + BLUE + "/xxxx/raw_data/A1/A1_2.fastq" + RESET)
-    print("  " + BLUE + "/xxxx/raw_data/A2/A2_1.fastq" + RESET)
-    print("  " + BLUE + "/xxxx/raw_data/A2/A2_2.fastq" + RESET)
-    print("  ......")
-    print("Therefore, -r should be set to /xxxx/raw_data.")
+    reads_md = Markdown(
+        "**Input reads location (-r):** the directory contains paired-end FASTQ files (decompressed), e.g.\n"
+        "```\n"
+        "/xxxx/raw_data/A1/A1_1.fastq\n"
+        "/xxxx/raw_data/A1/A1_2.fastq\n"
+        "/xxxx/raw_data/A2/A2_1.fastq\n"
+        "/xxxx/raw_data/A2/A2_2.fastq\n"
+        "...\n"
+        "```\n"
+        "Therefore, `-r` should be set to `/xxxx/raw_data`.\n"
+    )
 
-    print("\n" + GREEN + "The -out parameter specifies the output directory, which will contain four subdirectories corresponding to four analyses:" + RESET)
+    out_md = Markdown(
+        "**Output directory (-out):** it will contain four subdirectories corresponding to four analyses."
+    )
 
-    print("\n" + GREEN + "1. QC (Part 1: Basic Quality Control by Fastp)" + RESET)
-    print("  " + BLUE + "A1_trim_R1.fastq.gz" + RESET + " & " + BLUE + "A1_trim_R2.fastq.gz" + RESET + ": Quality-controlled FASTQ files, processed to remove adapters, filter by length, and trim low-quality reads.")
-    print("  " + BLUE + "A1_trim-unpaired_R1.fastq.gz" + RESET + " & " + BLUE + "A1_trim-unpaired_R2.fastq.gz" + RESET + ": Filtered FASTQ files, kept for backup.")
-    print("  " + BLUE + "A1_fastp_summary_before.tsv" + RESET + " & " + BLUE + "A1_fastp_summary_after.tsv" + RESET + ": Statistics on reads before and after quality control.")
-    print("  " + BLUE + "A1_unpaired_summary.tsv" + RESET + ": Information on filtered reads.")
-    print("  " + BLUE + "A1_fastp.json" + RESET + " & " + BLUE + "A1_fastp.html" + RESET + ": Quality control result reports.")
-    # print("\n" + GREEN + "Quality Reports" + RESET)
-    print("  " + BLUE + "~/origin_quality/A1_trim_R1_fastqc.html" + RESET + ": Quality detection report of original reads before quality control, in HTML format, generated by FastQC.")
-    print("  " + BLUE + "~/filtered_quality/A1_trim-unpaired_R1_fastqc.html" + RESET + " & " + BLUE + "~/filtered_quality/A1_trim_R1_fastqc.html" + RESET + ": Quality detection reports of reads after quality control, in HTML format, generated by FastQC.")
-    print("  " + BLUE + "~/origin_quality/*.zip" + RESET + " & " + BLUE + "~/filtered_quality/*.zip" + RESET + ": After decompression, detailed quality detection result files are obtained. The sub - directory 'Images' contains image displays of quality results.")
-    
-    print("\n" + GREEN + "2. rm_host (Part 2: Remove Host Genome by Bowtie2, Samtools, and Bedtools)" + RESET)
-    print("  " + BLUE + "A1_host_removed_1.fq" + RESET + " & " + BLUE + "A1_host_removed_2.fq" + RESET + ": Paired-end FASTQ files after removing host reads.")
-    print("  " + BLUE + "A1_unpaired_summary.tsv" + RESET + ": Statistics on paired-end FASTQ files after host removal.")
-    print("  (Other BAM and SAM files are intermediate results produced during the process.)")
+    console.print(Panel(intro, border_style="cyan", title="Quality_control", title_align="left"))
+    console.print(examples_md)
+    console.print(reads_md)
+    console.print(out_md)
+    console.print()
 
-    print("\n" + GREEN + "3. nonpareil (Part 3: Redundancy & Distribution Statistics)" + RESET)
-    print("  " + BLUE + "A1_rmhost.fq" + RESET + ": Merged paired-end FASTQ file, higher quality for statistics.")
-    print("  " + BLUE + ".npc" + RESET + ", " + BLUE + ".npl" + RESET + ", " + BLUE + ".npo" + RESET + ", " + BLUE + ".npa" + RESET + ": Nonpareil output files.")
-    print("  " + BLUE + "A1_nonpareil_index.tsv" + RESET + ": Results from Nonpareil analysis, including diversity, coverage, likelihood ratio, etc.")
-    print("  " + BLUE + "A1_nonpareil_curves.pdf" + RESET + ": Visualization of Nonpareil results.")
+    # ---- Part 1: QC (fastp) --------------------------------------------------
+    qc_tbl = Table(show_header=True, header_style="bold magenta")
+    qc_tbl.add_column("Files", style="cyan", no_wrap=True)
+    qc_tbl.add_column("Description", style="white")
 
-    print("\n" + GREEN + "4. KMC (Part 4: K-mer Frequency Statistics & Genome Feature Assessment)" + RESET)
-    print("  " + BLUE + "A1_sample.histo" + RESET + " & " + BLUE + "kmer_plot.pdf" + RESET + ": K-mer frequency distribution table and visualization.")
-    print("  " + BLUE + "/genome_feature/*" + RESET + ": Genome feature assessment and visualization.")
+    qc_tbl.add_row("A1_trim_R1.fastq.gz & A1_trim_R2.fastq.gz",
+                   "Quality-controlled FASTQ files (adapter trimming, length filter, low-quality trimming).")
+    qc_tbl.add_row("A1_trim-unpaired_R1.fastq.gz & A1_trim-unpaired_R2.fastq.gz",
+                   "Filtered FASTQ files, kept for backup.")
+    qc_tbl.add_row("A1_fastp_summary_before.tsv & A1_fastp_summary_after.tsv",
+                   "Statistics on reads before and after quality control.")
+    qc_tbl.add_row("A1_unpaired_summary.tsv", "Information on filtered reads.")
+    qc_tbl.add_row("A1_fastp.json & A1_fastp.html", "Quality control result reports.")
+    qc_tbl.add_row("~/origin_quality/A1_trim_R1_fastqc.html",
+                   "Quality detection report of original reads before QC (FastQC HTML).")
+    qc_tbl.add_row("~/filtered_quality/A1_trim-unpaired_R1_fastqc.html & ~/filtered_quality/A1_trim_R1_fastqc.html",
+                   "Quality detection reports of reads after QC (FastQC HTML).")
+    qc_tbl.add_row("~/origin_quality/*.zip & ~/filtered_quality/*.zip",
+                   "After decompression, detailed quality detection result files. "
+                   "Sub-directory 'Images' contains plots.")
 
-    print("\n" + GREEN + "All four sections can be analyzed using preset parameters, and users can adjust parameters according to their data needs." + RESET)
+    console.print(Panel(qc_tbl, border_style="magenta", title="1) QC (Basic Quality Control by Fastp)", title_align="left"))
+    console.print()
 
+    # ---- Part 2: rm_host -----------------------------------------------------
+    rm_tbl = Table(show_header=True, header_style="bold green")
+    rm_tbl.add_column("Files", style="cyan", no_wrap=True)
+    rm_tbl.add_column("Description", style="white")
 
-    print("\n" + PURPLE + "Detailed parameters")
-    # Print usage and global parameters
-    print(" " + GREEN + "=" * 50 + " " + RESET + YELLOW + "Usage & Global parameters" + RESET + " " + GREEN + "=" * 50 + RESET)#########################
+    rm_tbl.add_row("A1_host_removed_1.fq & A1_host_removed_2.fq",
+                   "Paired-end FASTQ files after removing host reads.")
+    rm_tbl.add_row("A1_unpaired_summary.tsv",
+                   "Statistics on paired-end FASTQ files after host removal.")
+    rm_tbl.add_row("(BAM/SAM intermediates)", "Intermediate results produced during the process.")
+    console.print(Panel(rm_tbl, border_style="green", title="2) rm_host (Bowtie2, Samtools, Bedtools)", title_align="left"))
+    console.print()
 
-    print("\n" + YELLOW + "Usage: Quality_control [OPTIONS] INPUT OUTPUT DATABASE" + RESET + "\n")
+    # ---- Part 3: Nonpareil ---------------------------------------------------
+    np_tbl = Table(show_header=True, header_style="bold yellow")
+    np_tbl.add_column("Files", style="cyan", no_wrap=True)
+    np_tbl.add_column("Description", style="white")
 
-    print(YELLOW + "Global parameters:" + RESET)
-    print(f"  {'-r, --raw_data':<40} Directory containing subdirectories for single-sample data.")
-    print(f"  {'-out, --out_dir':<40} Output directory for quality control and assembly.")
-    # print(f"  {'-qc_env, --quality_control_env':<40} QC's environment location (e.g., '/opt/user/xxx/tools/anaconda3/envs/QC').")
-    print(f"  {'-p, --thread':<40} Number of parallel threads (default: 80).")
+    np_tbl.add_row("A1_rmhost.fq", "Merged paired-end FASTQ file, higher quality for statistics.")
+    np_tbl.add_row(".npc, .npl, .npo, .npa", "Nonpareil output files.")
+    np_tbl.add_row("A1_nonpareil_index.tsv",
+                   "Results from Nonpareil analysis (diversity, coverage, likelihood ratio, etc.).")
+    np_tbl.add_row("A1_nonpareil_curves.pdf", "Visualization of Nonpareil results.")
+    console.print(Panel(np_tbl, border_style="yellow", title="3) nonpareil (Redundancy & Distribution Statistics)", title_align="left"))
+    console.print()
 
-    print("\n" + GREEN + "=" * 44 + " " + RESET + YELLOW + "Part1: Basic quality control by Fastp" + RESET + " " + GREEN + "=" * 44 + RESET)################################
+    # ---- Part 4: KMC ---------------------------------------------------------
+    kmc_tbl = Table(show_header=True, header_style="bold blue")
+    kmc_tbl.add_column("Files", style="cyan", no_wrap=True)
+    kmc_tbl.add_column("Description", style="white")
 
-    print("\n" + YELLOW + "Quality Filtering:" + RESET)
-    print(f"  {'-q, --qualified_quality':<40} Set the base quality value (default: 15).")
-    print(f"  {'-u, --unqualified_percent':<40} Proportion of unqualified bases allowed (default: 40).")
-    
-    print("\n" + YELLOW + "Length Filtering:" + RESET)
-    print(f"  {'-l_min, --length_required':<40} Minimum length of reads (default: 15).")
-    print(f"  {'-l_max, --length_limit':<40} Maximum length of reads (default: no limit).")
-    
-    print("\n" + YELLOW + "Low Complexity Filtering:" + RESET)
-    print(f"  {'-Y, --complexity_threshold':<40} Complexity-filtering threshold for reads (default: 30).")
-    
-    print("\n" + YELLOW + "Adapter Trimming:" + RESET)
-    print(f"  {'-a, --adapter':<40} Path of adapter fasta file.")
-    
-    print("\n" + YELLOW + "Paired-End Data Correction:" + RESET)
-    print(f"  {'-c, --correction':<40} Perform clipping and correction on paired-end (PE) data.")
-    
-    print("\n" + YELLOW + "Trimming Parameters for R1:" + RESET)
-    print(f"  {'-f, --trim_front1':<40} Remove base pairs from the start of R1 (default: 0).")
-    print(f"  {'-t, --trim_tail1':<40} Remove base pairs from the end of R1 (default: 0).")
-    print(f"  {'-b, --max_len1':<40} Maximum length threshold for R1 (default: no limit).")
-    
-    print("\n" + YELLOW + "Trimming Parameters for R2:" + RESET)
-    print(f"  {'-F, --trim_front2':<40} Remove base pairs from the start of R2 (default: same as R1).")
-    print(f"  {'-T, --trim_tail2':<40} Remove base pairs from the end of R2 (default: same as R1).")
-    print(f"  {'-B, --max_len2':<40} Maximum length for R2 (default: no limit).")
+    kmc_tbl.add_row("A1_sample.histo & kmer_plot.pdf",
+                    "K-mer frequency distribution table and visualization.")
+    kmc_tbl.add_row("/genome_feature/*", "Genome feature assessment and visualization.")
+    console.print(Panel(kmc_tbl, border_style="blue", title="4) KMC (K-mer Frequency & Genome Feature Assessment)", title_align="left"))
+    console.print(Panel("All four sections can be analyzed using preset parameters, and users can adjust parameters according to their data needs.",
+                        border_style="cyan"))
+    console.print(Rule())
 
-    print("\n" + GREEN + "=" * 33 + " " + RESET + YELLOW + "Part2: Remove host genome by Bowtie2, Samtools and bedtools" + RESET + " " + GREEN + "=" * 33 + RESET)###############################
+    # ====================== Detailed parameters ===============================
+    console.print("[bold]Detailed parameters[/bold]\n")
 
-    print("\n" + YELLOW + "Host Genome Parameters:" + RESET)
-    print(f"  {'-gf, --genome_fasta':<40} Path to the host genome FASTA file.")
-    print(f"  {'-gi, --genome_index':<40} Index file for the host genome.")
-    
-    print("\n" + GREEN + "=" * 41 + " " + RESET + YELLOW + "Part3: Redundancy & Distribution Statistics" + RESET + " " + GREEN + "=" * 41 + RESET)####################################
+    # --- Usage & Global
+    console.print(Panel("Usage: Quality_control [OPTIONS] INPUT OUTPUT DATABASE",
+                        border_style="cyan", title="Usage & Global parameters", title_align="left"))
 
-    print("\n" + YELLOW + "Mandatory parameters:" + RESET)
-    print(f"  {'-min_cut, --min_reads_cut':<40} Remove short reads before redundancy and distribution evaluation. (default: 15)")  
-    print(f"  {'-T_nnp, --nonpareil_mth':<40} Method for redundancy analysis ('kmer' or 'alignment').")
+    g_tbl = Table(show_header=False, box=None, pad_edge=False)
+    g_tbl.add_column("Flag", style="bold cyan", no_wrap=True)
+    g_tbl.add_column("Description", style="white")
+    g_tbl.add_row("-cf, --config", "DPath to config.yml for env/tools/dbs.")
+    g_tbl.add_row("-r, --raw_data", "Directory containing subdirectories for single-sample data.")
+    g_tbl.add_row("-out, --out_dir", "Output directory for quality control and assembly.")
+    g_tbl.add_row("-p, --thread", "Number of parallel threads (default: 80).")
+    console.print(g_tbl)
+    console.print()
 
-    print("\n" + YELLOW + "Common parameters:" + RESET)
-    print(f"  {'-X, --max_reads':<40} Maximum reads for analysis (default: 10000 for 'kmer', 1000 for 'alignment').")
-    print(f"  {'-k, --kmer_length':<40} Length of kmer (default: 24).")
-    print(f"  {'-n, --num_subsamples':<40} Number of subsamples per point (default: 1024).")
-    print(f"  {'-L, --min_overlap':<40} Minimum overlap percentage for alignment regions (default: 50.0).")
-    print(f"  {'-R, --max_ram':<40} Maximum RAM usage in MiB (default: 1024).")
-    print(f"  {'-v, --verbose':<40} Verbosity level (default: 7).")
-    print(f"  {'-r_seed, --random_seed':<40} Random seed for reproducibility (only for 'alignment').")
+    # --- Part1: fastp options
+    console.print(Panel("Part1: Basic quality control by Fastp", border_style="magenta"))
 
-    print("\n" + GREEN + "=" * 32 + " " + RESET + YELLOW + "Part4: K-mer frequency statistics & Genome feature assessment" + RESET + " " + GREEN + "=" * 32 + RESET)##############################
+    t1 = Table(show_header=False, box=None, pad_edge=False)
+    t1.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1.add_column("Description", style="white")
 
-    print("\n" + YELLOW + "Frequency statistics of k-mer & Genome feature assessment:" + RESET)
-    print(f"  {'-kl, --kmer_l':<40} Specify k-mer length (range: 1 to 256, default: 25).")
-    print(f"  {'-m, --memory':<40} Set maximum memory usage (GB, range: 1 to 1024, default: 12).")
-    print(f"  {'-ci, --min_kmer_coverage':<40} Exclude k-mers with coverage below this value (default: 2).")
-    print(f"  {'-cs, --max_kmer_coverage':<40} Set maximum value for k-mer counters (default: 255).")
-    print(f"  {'-cx, --kmer_times':<40} Exclude k-mers that appear more than this value (default: 10000).")
-    print(f"  {'-min_freq, --min_freq':<40} Minimum k-mer length when plot k-mer frequency (default: 5).")
-    print(f"  {'-max_freq, --max_freq':<40} Maximum k-mer length when plot k-mer frequency (default: 500).")
+    # Quality Filtering
+    console.print("[bold]Quality Filtering:[/bold]")
+    t1.add_row("-q, --qualified_quality", "Set the base quality value (default: 15).")
+    t1.add_row("-u, --unqualified_percent", "Proportion of unqualified bases allowed (default: 40).")
+    console.print(t1)
+
+    # Length Filtering
+    t1a = Table(show_header=False, box=None, pad_edge=False)
+    t1a.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1a.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Length Filtering:[/bold]")
+    t1a.add_row("-l_min, --length_required", "Minimum length of reads (default: 15).")
+    t1a.add_row("-l_max, --length_limit", "Maximum length of reads (default: no limit).")
+    console.print(t1a)
+
+    # Low Complexity
+    t1b = Table(show_header=False, box=None, pad_edge=False)
+    t1b.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1b.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Low Complexity Filtering:[/bold]")
+    t1b.add_row("-Y, --complexity_threshold", "Complexity-filtering threshold for reads (default: 30).")
+    console.print(t1b)
+
+    # Adapter
+    t1c = Table(show_header=False, box=None, pad_edge=False)
+    t1c.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1c.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Adapter Trimming:[/bold]")
+    t1c.add_row("-a, --adapter", "Path of adapter fasta file.")
+    console.print(t1c)
+
+    # PE Correction
+    t1d = Table(show_header=False, box=None, pad_edge=False)
+    t1d.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1d.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Paired-End Data Correction:[/bold]")
+    t1d.add_row("-c, --correction", "Perform clipping and correction on paired-end (PE) data.")
+    console.print(t1d)
+
+    # R1 trimming
+    t1e = Table(show_header=False, box=None, pad_edge=False)
+    t1e.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1e.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Trimming Parameters for R1:[/bold]")
+    t1e.add_row("-f, --trim_front1", "Remove base pairs from the start of R1 (default: 0).")
+    t1e.add_row("-t, --trim_tail1", "Remove base pairs from the end of R1 (default: 0).")
+    t1e.add_row("-b, --max_len1", "Maximum length threshold for R1 (default: no limit).")
+    console.print(t1e)
+
+    # R2 trimming
+    t1f = Table(show_header=False, box=None, pad_edge=False)
+    t1f.add_column("Flag", style="bold cyan", no_wrap=True)
+    t1f.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Trimming Parameters for R2:[/bold]")
+    t1f.add_row("-F, --trim_front2", "Remove base pairs from the start of R2 (default: same as R1).")
+    t1f.add_row("-T, --trim_tail2", "Remove base pairs from the end of R2 (default: same as R1).")
+    t1f.add_row("-B, --max_len2", "Maximum length for R2 (default: no limit).")
+
+    console.print(t1f)
+    console.print()
+
+    # --- Part2: host removal
+    console.print(Panel("Part2: Remove host genome by Bowtie2, Samtools and bedtools", border_style="green"))
+    t2 = Table(show_header=False, box=None, pad_edge=False)
+    t2.add_column("Flag", style="bold cyan", no_wrap=True)
+    t2.add_column("Description", style="white")
+    t2.add_row("-gf, --genome_fasta", "Path to the host genome FASTA file.")
+    t2.add_row("-gi, --genome_index", "Index file for the host genome.")
+    console.print(t2)
+    console.print()
+
+    # --- Part3: Nonpareil
+    console.print(Panel("Part3: Redundancy & Distribution Statistics", border_style="yellow"))
+    t3 = Table(show_header=False, box=None, pad_edge=False)
+    t3.add_column("Flag", style="bold cyan", no_wrap=True)
+    t3.add_column("Description", style="white")
+    console.print("[bold]Mandatory parameters:[/bold]")
+    t3.add_row("-min_cut, --min_reads_cut", "Remove short reads before redundancy and distribution evaluation. (default: 15)")
+    t3.add_row("-T_nnp, --nonpareil_mth", "Method for redundancy analysis ('kmer' or 'alignment').")
+    console.print(t3)
+
+    t3c = Table(show_header=False, box=None, pad_edge=False)
+    t3c.add_column("Flag", style="bold cyan", no_wrap=True)
+    t3c.add_column("Description", style="white")
+    console.print()
+    console.print("[bold]Common parameters:[/bold]")
+    t3c.add_row("-X, --max_reads", "Maximum reads for analysis (default: 10000 for 'kmer', 1000 for 'alignment').")
+    t3c.add_row("-k, --kmer_length", "Length of kmer (default: 24).")
+    t3c.add_row("-n, --num_subsamples", "Number of subsamples per point (default: 1024).")
+    t3c.add_row("-L, --min_overlap", "Minimum overlap percentage for alignment regions (default: 50.0).")
+    t3c.add_row("-R, --max_ram", "Maximum RAM usage in MiB (default: 1024).")
+    t3c.add_row("-v, --verbose", "Verbosity level (default: 7).")
+    t3c.add_row("-r_seed, --random_seed", "Random seed for reproducibility (only for 'alignment').")
+    console.print(t3c)
+    console.print()
+
+    # --- Part4: KMC
+    console.print(Panel("Part4: K-mer frequency statistics & Genome feature assessment", border_style="blue"))
+    t4 = Table(show_header=False, box=None, pad_edge=False)
+    t4.add_column("Flag", style="bold cyan", no_wrap=True)
+    t4.add_column("Description", style="white")
+    t4.add_row("-kl, --kmer_l", "Specify k-mer length (range: 1 to 256, default: 25).")
+    t4.add_row("-m, --memory", "Set maximum memory usage (GB, range: 1 to 1024, default: 12).")
+    t4.add_row("-ci, --min_kmer_coverage", "Exclude k-mers with coverage below this value (default: 2).")
+    t4.add_row("-cs, --max_kmer_coverage", "Set maximum value for k-mer counters (default: 255).")
+    t4.add_row("-cx, --kmer_times", "Exclude k-mers that appear more than this value (default: 10000).")
+    t4.add_row("-min_freq, --min_freq", "Minimum k-mer length when plot k-mer frequency (default: 5).")
+    t4.add_row("-max_freq, --max_freq", "Maximum k-mer length when plot k-mer frequency (default: 500).")
+    console.print(t4)
+
+    console.print()
+    console.print(Rule(style="dim"))
 
 
 
@@ -501,49 +613,95 @@ class CustomArgumentParser(argparse.ArgumentParser):
 
 def main():
     parser = CustomArgumentParser(description="Upstream of metagenomics (quality control and contigs assembly).")
-    parser.add_argument("-r", "--raw_data", type=str, required=True, help="Directory containing subdirectories for single-sample data.")
-    parser.add_argument("-out", "--out_dir", type=str, required=True, help="Output directory for quality control and assembly.")
-    parser.add_argument("-p", "--thread", type=int, default=80, help="Number of parallel threads (default: 80)")
-
-    parser.add_argument("-q", "--qualified_quality", type=int, default=15, help="Base quality value (default: 15).")
-    parser.add_argument("-u", "--unqualified_percent", type=int, default=40, help="Proportion of unqualified bases (default: 40).")
-    parser.add_argument("-l_min", "--length_required", type=int, default=15, help="Minimum length of reads (default: 15).")
-    parser.add_argument("-l_max", "--length_limit", type=int, default=0, help="Maximum length of reads (default: no limit).")
-    parser.add_argument("-Y", "--complexity_threshold", type=int, default=30, help="Complexity-filtering threshold (default: 30).")
-    parser.add_argument("-a", "--adapter", type=str, help="Path of adapter fasta file.")
-    parser.add_argument("-c", "--correction", action='store_true', help="Perform clipping and correction on paired-end (PE) data.")
-    parser.add_argument("-f", "--trim_front1", type=int, default=0, help="Remove base pairs from start of R1 (default: 0).")
-    parser.add_argument("-t", "--trim_tail1", type=int, default=0, help="Remove base pairs from end of R1 (default: 0).")
-    parser.add_argument("-b", "--max_len1", type=int, default=0, help="Maximum length for R1 (default: 0 == no limit).")
-    parser.add_argument("-F", "--trim_front2", type=int, default=0, help="Remove base pairs from start of R2 (default: same as R1).")
-    parser.add_argument("-T", "--trim_tail2", type=int, default=0, help="Remove base pairs from end of R2 (default: same as R1).")
-    parser.add_argument("-B", "--max_len2", type=int, default=0, help="Maximum length for R2 (default: 0 == no limit).")
-
-    # 去宿主部分参数
-    parser.add_argument("-gf", "--genome_fasta", type=str, help="Path of reference genome.fasta.")
-    parser.add_argument("-gi", "--genome_index", type=str, help="Directory containing bowtie2 index for reference genome.")
-
-    # 冗余度&分布统计
-    parser.add_argument("-min_cut", "--min_reads_cut", type=int, default=15, help='Remove short reads before redundancy and distribution evaluation. (default: 15)')
-    parser.add_argument("-T_nnp", "--nonpareil_mth", type=str, choices=['kmer', 'alignment'], default='kmer', help='"kmer" or "alignment" (default == kmer)')
-    parser.add_argument("-X", "--max_reads", type=int, default=10000, help='Default "kmer"=10000 or "alignment"=1000')
-    parser.add_argument("-k", "--kmer_length", type=int, default=24, help='Length of kmer, default 24.')   
-    parser.add_argument("-n", "--num_subsamples", type=int, default=1024, help='Number of subsamples per point, default 1024.')
-    parser.add_argument("-L", "--min_overlap", type=float, default=50.0, help='Minimum overlap percentage for alignment regions, default 50.')
-    parser.add_argument("-R", "--max_ram", type=int, default=1024, help='Maximum RAM usage (MiB), default 1024.')
-    parser.add_argument("-v", "--verbose", type=int, default=7, help='Verbosity level, default 7.')
-    parser.add_argument("-r_seed", "--random_seed", type=int, help='Random seed for reproducibility, only implemented for "alignment" method.')
-
-    #  k-mer频数统计&基因组特征评估  冗余度&分布统计 
-    parser.add_argument("-kl", "--kmer_l", type=int, default=25, help="Specify k-mer length (range: 1 to 256, default: 25).")
-    parser.add_argument("-m", "--memory", type=int, default=12, help="Set maximum memory usage (GB, range: 1 to 1024, default: 12).")
-    parser.add_argument("-ci", "--min_kmer_coverage", type=int, default=2, help="Exclude k-mers with coverage below this value (default: 2).")
-    parser.add_argument("-cs", "--max_kmer_coverage", type=int, default=255, help="Set maximum value for k-mer counters (default: 255).")
-    parser.add_argument("-cx", "--kmer_times", type=int, default=10000, help="Exclude k-mers that appear more than this value (default: 10000).")
-    parser.add_argument("-min_freq", "--min_freq", type=int, default=5, help="Minimum k-mer length when plot k-mer Frequency (default: 5).")
-    parser.add_argument("-max_freq", "--max_freq", type=int, default=500, help="Maxmum k-mer length when plot k-mer Frequency (default: 500).")
-
+    parser.add_argument('-cf','--config', type=str, help='Path to config.yml for env/tools/dbs')
+    parser.add_argument("-r", "--raw_data", type=str, required=True)
+    parser.add_argument("-out", "--out_dir", type=str, required=True)
+    parser.add_argument("-p", "--thread", type=int, default=80)
+    parser.add_argument("-q", "--qualified_quality", type=int, default=15)
+    parser.add_argument("-u", "--unqualified_percent", type=int, default=40)
+    parser.add_argument("-l_min", "--length_required", type=int, default=15)
+    parser.add_argument("-l_max", "--length_limit", type=int, default=0)
+    parser.add_argument("-Y", "--complexity_threshold", type=int, default=30)
+    parser.add_argument("-a", "--adapter", type=str)
+    parser.add_argument("-c", "--correction", action='store_true')
+    parser.add_argument("-f", "--trim_front1", type=int, default=0)
+    parser.add_argument("-t", "--trim_tail1", type=int, default=0)
+    parser.add_argument("-b", "--max_len1", type=int, default=0)
+    parser.add_argument("-F", "--trim_front2", type=int, default=0)
+    parser.add_argument("-T", "--trim_tail2", type=int, default=0)
+    parser.add_argument("-B", "--max_len2", type=int, default=0)
+    parser.add_argument("-gf", "--genome_fasta", type=str)
+    parser.add_argument("-gi", "--genome_index", type=str)
+    parser.add_argument("-min_cut", "--min_reads_cut", type=int, default=15)
+    parser.add_argument("-T_nnp", "--nonpareil_mth", type=str, choices=['kmer', 'alignment'], default='kmer')
+    parser.add_argument("-X", "--max_reads", type=int, default=10000)
+    parser.add_argument("-k", "--kmer_length", type=int, default=24)   
+    parser.add_argument("-n", "--num_subsamples", type=int, default=1024)
+    parser.add_argument("-L", "--min_overlap", type=float, default=50.0)
+    parser.add_argument("-R", "--max_ram", type=int, default=1024)
+    parser.add_argument("-v", "--verbose", type=int, default=7)
+    parser.add_argument("-r_seed", "--random_seed", type=int)
+    parser.add_argument("-kl", "--kmer_l", type=int, default=25)
+    parser.add_argument("-m", "--memory", type=int, default=12)
+    parser.add_argument("-ci", "--min_kmer_coverage", type=int, default=2)
+    parser.add_argument("-cs", "--max_kmer_coverage", type=int, default=255)
+    parser.add_argument("-cx", "--kmer_times", type=int, default=10000)
+    parser.add_argument("-min_freq", "--min_freq", type=int, default=5)
+    parser.add_argument("-max_freq", "--max_freq", type=int, default=500)
     args = parser.parse_args()
+
+    cfg = {}
+    if args.config:
+        with open(args.config, 'r') as f:
+            raw = yaml.safe_load(f) or {}
+            cfg.update(raw)
+    global CONFIG
+    CONFIG = cfg
+    vmp_env = cfg.get('VMP_env')
+    if vmp_env:
+        vmp_env = str(vmp_env).strip().strip("'\"")
+        env_bin = os.path.join(vmp_env, 'bin')
+        if os.path.isdir(env_bin):
+            os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH','')
+        else:
+            print(f"[warn] VMP_env bin not found: {env_bin} (continuing)")
+    if (getattr(args, 'genome_fasta', None) is None or getattr(args, 'genome_index', None) is None) and cfg.get('host_genome'):
+        host_dir = str(cfg.get('host_genome')).strip().strip("'\"")
+        default_fa = os.path.join(host_dir, 'hg38.fa')
+        # put bowtie2 index under output dir to avoid permission issues
+        default_index_dir = os.path.join(args.out_dir, 'rm_host', 'host_index')
+        os.makedirs(default_index_dir, exist_ok=True)
+        default_index = os.path.join(default_index_dir, 'hg38')
+        if getattr(args, 'genome_fasta', None) is None:
+            args.genome_fasta = default_fa
+        if getattr(args, 'genome_index', None) is None:
+            args.genome_index = default_index
+
+    cfg = {}
+    if args.config:
+        with open(args.config, 'r') as f:
+            raw = yaml.safe_load(f) or {}
+            cfg.update(raw)
+    vmp_env = cfg.get('VMP_env')
+    if vmp_env:
+        vmp_env = str(vmp_env).strip().strip("'\"")
+        env_bin = os.path.join(vmp_env, 'bin')
+        if os.path.isdir(env_bin):
+            os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH','')
+        else:
+            print(f"[warn] VMP_env bin not found: {env_bin} (continuing)")
+
+    if (getattr(args, 'genome_fasta', None) is None or getattr(args, 'genome_index', None) is None) and cfg.get('host_genome'):
+        host_dir = str(cfg.get('host_genome')).strip().strip("'\"")
+        default_fa = os.path.join(host_dir, 'hg38.fa')
+        default_index_dir = os.path.join(args.out_dir, 'rm_host', 'host_index')
+        os.makedirs(default_index_dir, exist_ok=True)
+        default_index = os.path.join(default_index_dir, 'hg38')
+        if getattr(args, 'genome_fasta', None) is None:
+            args.genome_fasta = default_fa
+        if getattr(args, 'genome_index', None) is None:
+            args.genome_index = default_index
+
 
     fastq_list = Getfastq_list(args.raw_data)
     fastp(args.out_dir, args.raw_data, fastq_list, args.qualified_quality, args.unqualified_percent, args.length_required, args.length_limit, args.complexity_threshold, args.adapter, args.correction, args.trim_front1, args.trim_tail1, args.max_len1, args.trim_front2, args.trim_tail2, args.max_len2, args.thread)
@@ -554,3 +712,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
