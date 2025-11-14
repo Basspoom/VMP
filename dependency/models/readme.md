@@ -1,0 +1,1 @@
+Please run `prepare_database.py` fist to automatically download and configure all required files.
