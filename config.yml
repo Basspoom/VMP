@@ -1,5 +1,24 @@
-VIBRANT_db: 'VMP/databases/VIBRANT_db'
-CheckV_db: 'VMP/databases/CheckV_db'
-Kaiju_db: '/your/path/to/Kaiju_db'
-geNomad_db: '/your/path/to/geNomad_db'
-VPAC_models: 'VMP/databases/VPAC_models'
+# env
+VMP_env: '/home/user/miniforge3/envs/VMP/'
+VPAC_single: '/home/user/miniforge3/envs/VPAC-single'
+VPAC_dual: '/home/user/miniforge3/envs/VPAC-dual'
+Binning: '/home/user/miniforge3/envs/Binning'
+
+
+# dbs
+VIBRANT_db: '/path/to/VMP/dependency/databases/VIBRANT_db/databases'
+CheckV_db: '/path/to/VMP/dependency/databases/CheckV_db'
+Kaiju_db: '/path/to/VMP/dependency/databases/Kaiju_db'
+geNomad_db: '/path/to/VMP/dependency/databases/geNomad_db/genomad_db'
+checkM_db: '/path/to/VMP/dependency/databases/checkM_db'
+VirSorter2_db: '/path/to/VMP/dependency/databases/VirSorter2_db'
+host_genome: '/path/to/VMP/dependency/databases/host_genome/Homo_sapiens'
+# tools
+
+DeepVirFinder: '/path/to/VMP/dependency/tools/DeepVirFinder'
+genomescope2.0: '/path/to/VMP/dependency/tools/genomescope2.0'
+
+
+# models
+VPAC_models: '/path/to/VMP/dependency/models/VPAC_models'
+Evo_models: '/path/to/VMP/dependency/models/Evo'
