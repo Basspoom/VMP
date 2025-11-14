@@ -12,6 +12,11 @@ from rich.table import Table
 from rich.rule import Rule
 from rich.markdown import Markdown
 
+try:
+    import yaml
+except Exception:
+    yaml = None
+
 HERE = Path(__file__).resolve().parent
 
 QC_SCRIPT          = HERE / "QC.py"
@@ -42,16 +47,18 @@ def custom_help():
         "  --cluster skani_pyleiden \\\n"
         "  -t 60 --parallel 2\n"
         "\n"
-        "VMP_end2end.py -i /raw -o /run -cf ./config.yml --assembly megahit --vpac single --cluster cd-hit_mmseq -t 48\n"
+        "VMP_end2end.py -i /raw -o /run -cf ./config.yml --assembly megahit --vpac single --cluster cd-hit_mmseq -t 48 --resume\n"
         "```\n"
     )
 
     io_md = Markdown(
         "**I/O conventions:**\n"
-        "- [QC]      input: `-i` (raw paired FASTQ parent) → output: `-o/Clean_reads/`\n"
-        "- [Assembly] input: `-o/Clean_reads/` → output: `-o/raw_contigs/`\n"
-        "- [VPAC]     input: `-o/raw_contigs/` → output: `-o/Viral_contigs/{spades|megahit}-single/` (mVC, mVC_dual)\n"
+        "- [QC]        input: `-i` (raw paired FASTQ parent) → output: `-o/Clean_reads/`\n"
+        "- [Assembly]  input: `-o/Clean_reads/` → output: `-o/raw_contigs/`\n"
+        "- [VPAC]      input: `-o/raw_contigs/` → output: `-o/Viral_contigs/{spades|megahit}-single/` (mVC, mVC_dual)\n"
         "- [Clustering] input: VPAC output dir → output: `-o/cluster_{tool}/`\n"
+        "\n"
+        "[dim]*This orchestrator supports auto-resume and runs each step in its configured Conda env.*[/dim]"
     )
 
     console.print(Panel(intro, border_style="cyan", title="VMP End-to-End", title_align="left"))
@@ -85,6 +92,8 @@ def custom_help():
     g_tbl.add_row("-cf, --config", "Path to config.yml (envs/tools/models for all steps).")
     g_tbl.add_row("-t, --threads", "Threads for tools that accept -t/--threads (default: 60).")
     g_tbl.add_row("--parallel", "Parallel samples where supported (default: 2).")
+    g_tbl.add_row("--resume/--no-resume", "Auto-detect finished steps and continue (default: on).")
+    g_tbl.add_row("--from-step", "Override resume and start from a specific step.")
     console.print(g_tbl)
     console.print()
 
@@ -121,30 +130,45 @@ class CustomArgumentParser(argparse.ArgumentParser):
         custom_help()
         self.exit()
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = CustomArgumentParser(
         prog="VMP_end2end.py",
         description="End-to-end controller for VMP: QC → Assembly → VPAC → Clustering (config-driven).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    # Required high-level
     p.add_argument("-i", "--input",  required=True, help="Directory containing raw paired FASTQ (one subdir per sample).")
     p.add_argument("-o", "--output", required=True, help="Root output directory for the whole run.")
     p.add_argument("-cf", "--config", required=True, help="Path to config.yml consumed by component scripts.")
+    # Assembly choice
     p.add_argument("--assembly", choices=["spades", "megahit"], default="spades", help="Assembler to use.")
     p.add_argument("--spades-metaviral", action="store_true", help="If using SPAdes, add --metaviral.")
+    # VPAC mode
     p.add_argument("--vpac", choices=["single", "dual", "both"], default="both",
                    help="Run only VPAC-single, only VPAC-dual, or both (same in/out).")
     p.add_argument("--device", default="cuda:0", help="Device for VPAC-dual (e.g., cuda:0 / cpu).")
+    # Clustering
     p.add_argument("--cluster", choices=["cd-hit_mmseq", "skani_pyleiden"], default="skani_pyleiden",
                    help="Clustering / de-redundancy toolchain.")
+    # Common resources
     p.add_argument("-t", "--threads", type=int, default=60, help="Threads for tools that accept -t/--threads.")
     p.add_argument("--parallel", type=int, default=2, help="Parallel samples (where supported).")
+    # VPAC-single defaults
     p.add_argument("--lmin", type=int, default=3000, help="VPAC-single min contig length.")
     p.add_argument("--lmax", type=int, default=100000, help="VPAC-single max contig length.")
+    # Resume & control
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--resume", dest="resume", action="store_true", help="Auto-detect finished steps and continue from the latest.")
+    g.add_argument("--no-resume", dest="resume", action="store_false", help="Disable auto-resume; run all steps from the start.")
+    p.set_defaults(resume=True)
+    p.add_argument("--from-step", choices=["qc", "assembly", "vpac_single", "vpac_dual", "clustering"],
+                   help="Start from a specific step (overrides --resume).")
     return p
 
+
+# --------------------------- Utilities & Envs ---------------------------------
 def run(cmd: List[str], cwd: Optional[Path] = None) -> None:
-    """Run a command; raise on non-zero exit, while echoing the command nicely."""
     pretty = " ".join(shlex.quote(x) for x in cmd)
     console.print(f"[bold white]$[/bold white] {pretty}")
     proc = subprocess.run(cmd, cwd=str(cwd) if cwd else None)
@@ -157,6 +181,56 @@ def ensure_exists(p: Path, hint: str = "") -> None:
         if hint:
             msg += f"  ({hint})"
         raise FileNotFoundError(msg)
+
+def is_nonempty_dir(p: Path) -> bool:
+    return p.exists() and p.is_dir() and any(p.iterdir())
+
+def any_fastas(p: Path) -> bool:
+    if not p.exists() or not p.is_dir():
+        return False
+    for ext in ("*.fa", "*.fna", "*.fasta", "*.contigs.fa", "*.contigs.fasta"):
+        if any(p.glob(ext)):
+            return True
+    for sub in p.iterdir():
+        if sub.is_dir():
+            for ext in ("*.fa", "*.fna", "*.fasta", "*.contigs.fa", "*.contigs.fasta"):
+                if any(sub.glob(ext)):
+                    return True
+    return False
+
+def _first_existing_key(d: dict, keys: list[str]) -> Optional[str]:
+    for k in keys:
+        if k in d and d[k]:
+            return str(d[k])
+    return None
+
+def load_envs_from_config(cfg_path: Path) -> dict:
+    envs = {"qc": None, "assembly": None, "vpac_single": None, "vpac_dual": None, "clustering": None}
+    if yaml is None:
+        console.print("[yellow]PyYAML not available; running all steps in the current Python env.[/yellow]")
+        return envs
+    try:
+        cfg = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+        if not isinstance(cfg, dict):
+            return envs
+        envs["qc"]          = _first_existing_key(cfg, ["VMP_env", "VMP_new", "QC_env"])
+        envs["assembly"]    = _first_existing_key(cfg, ["VMP_env", "VMP_new", "Assembly_env"])
+        envs["vpac_single"] = _first_existing_key(cfg, ["VPAC_single", "VPAC_single_env"])
+        envs["vpac_dual"]   = _first_existing_key(cfg, ["VPAC_dual", "VMP_dual", "VPAC_dual_env"])
+        envs["clustering"]  = _first_existing_key(cfg, ["VMP_env", "VMP_new", "Clustering_env"])
+    except Exception as e:
+        console.print(f"[yellow]Failed to parse config.yml for envs: {e}. Falling back to current env.[/yellow]")
+    return envs
+
+def run_in_env(env_prefix: Optional[str], script: Path, args_list: list[str]) -> None:
+    if env_prefix:
+        python_bin = Path(env_prefix) / "bin" / "python"
+        if python_bin.exists():
+            run([str(python_bin), str(script)] + args_list)
+            return
+        run(["conda", "run", "--no-capture-output", "--prefix", str(env_prefix), "python", str(script)] + args_list)
+        return
+    run([sys.executable, str(script)] + args_list)
 
 def step_header(title: str, subtitle: str = "") -> None:
     text = f"[bold]{title}[/bold]"
@@ -196,6 +270,76 @@ def print_plan(args):
     console.print(tbl)
     console.print(Rule())
 
+def detect_resume_step(args) -> str:
+    out_root        = Path(args.output).resolve()
+    clean_reads_dir = out_root / "Clean_reads"
+    raw_contigs_dir = out_root / "raw_contigs"
+    vpac_out_dir    = out_root / "Viral_contigs" / f"{args.assembly}-single"
+    mvc_dir         = vpac_out_dir / "mVC"
+    mvc_dual_dir    = vpac_out_dir / "mVC_dual"
+    cluster_out_dir = out_root / f"cluster_{args.cluster}"
+
+    if not is_nonempty_dir(clean_reads_dir):
+        return "qc"
+    if not any_fastas(raw_contigs_dir):
+        return "assembly"
+    if args.vpac == "single":
+        if not is_nonempty_dir(mvc_dir):
+            return "vpac_single"
+    elif args.vpac == "dual":
+        if not is_nonempty_dir(mvc_dual_dir):
+            return "vpac_dual"
+    else:
+        if not is_nonempty_dir(mvc_dir):
+            return "vpac_single"
+        if not is_nonempty_dir(mvc_dual_dir):
+            return "vpac_dual"
+    if not is_nonempty_dir(cluster_out_dir):
+        return "clustering"
+    return "done"
+
+def run_qc(args, raw_fastq_dir: Path, out_root: Path, cfg_path: Path):
+    envs = load_envs_from_config(cfg_path)
+    qc_env = envs.get('qc')
+    step_header("Step 1 — QC", "fastp / host removal / summaries")
+    run_in_env(qc_env, QC_SCRIPT,
+               ["-r", str(raw_fastq_dir), "-out", str(out_root), "-cf", str(cfg_path)] +
+               ([] if args.threads is None else ["-p", str(args.threads)]))
+
+def run_assembly(args, clean_reads_dir: Path, out_root: Path, cfg_path: Path):
+    envs = load_envs_from_config(cfg_path)
+    asm_env = envs.get('assembly')
+    step_header("Step 2 — Assembly", f"{args.assembly.upper()} → raw_contigs/")
+    asm_args = ["-r", str(clean_reads_dir), "-out", str(out_root), "-cf", str(cfg_path),
+                "--tool", args.assembly, "--parallel", str(args.parallel), "-p", str(args.threads)]
+    if args.assembly == "spades" and args.spades_metaviral:
+        asm_args.append("--metaviral")
+    run_in_env(asm_env, ASM_SCRIPT, asm_args)
+
+def run_vpac_single(args, raw_contigs_dir: Path, vpac_out_dir: Path, cfg_path: Path):
+    envs = load_envs_from_config(cfg_path)
+    vs_env = envs.get('vpac_single')
+    step_header("Step 3 — VPAC-single", "FNN classifier")
+    run_in_env(vs_env, VPAC_SINGLE_SCRIPT,
+               ["-i", str(raw_contigs_dir), "-o", str(vpac_out_dir),
+                "-lmin", str(args.lmin), "-lmax", str(args.lmax),
+                "-t", str(args.threads), "--parallel", "1", "-m", "FNN", "-cf", str(cfg_path)])
+
+def run_vpac_dual(args, raw_contigs_dir: Path, vpac_out_dir: Path, cfg_path: Path):
+    envs = load_envs_from_config(cfg_path)
+    vd_env = envs.get('vpac_dual')
+    step_header("Step 3 — VPAC-dual", "dual-path classifier")
+    run_in_env(vd_env, VPAC_DUAL_SCRIPT,
+               ["-i", str(raw_contigs_dir), "-o", str(vpac_out_dir), "-d", args.device, "-cf", str(cfg_path)])
+
+def run_clustering(args, vpac_out_dir: Path, cluster_out_dir: Path, cfg_path: Path):
+    envs = load_envs_from_config(cfg_path)
+    clu_env = envs.get('clustering')
+    step_header("Step 4 — Clustering", f"tool = {args.cluster}")
+    run_in_env(clu_env, CLUST_SCRIPT,
+               ["-i", str(vpac_out_dir), "-o", str(cluster_out_dir), "--tool", args.cluster,
+                "--parallel", str(args.parallel), "-cf", str(cfg_path)])
+
 def orchestrate(args):
     for script in (QC_SCRIPT, ASM_SCRIPT, VPAC_SINGLE_SCRIPT, VPAC_DUAL_SCRIPT, CLUST_SCRIPT):
         ensure_exists(script, "Component script missing in the same folder.")
@@ -206,64 +350,76 @@ def orchestrate(args):
 
     ensure_exists(raw_fastq_dir, "Input FASTQ dir")
     ensure_exists(cfg_path, "config.yml")
-
     out_root.mkdir(parents=True, exist_ok=True)
+
     clean_reads_dir = out_root / "Clean_reads"
     raw_contigs_dir = out_root / "raw_contigs"
     vpac_out_dir    = out_root / "Viral_contigs" / f"{args.assembly}-single"
     cluster_out_dir = out_root / f"cluster_{args.cluster}"
 
-    step_header("Step 1 — QC", "fastp / host removal / summaries (see QC script)")
-    run([sys.executable, str(QC_SCRIPT),
-         "-r", str(raw_fastq_dir),
-         "-o", str(out_root),
-         "-cf", str(cfg_path),
-    ] + ([] if args.threads is None else ["-t", str(args.threads)]))
+    start_step = None
+    if args.from_step:
+        start_step = args.from_step
+    elif args.resume:
+        start_step = detect_resume_step(args)
+    else:
+        start_step = "qc"
+
+    status_tbl = Table(show_header=True, header_style="bold blue")
+    status_tbl.add_column("Step", style="cyan", no_wrap=True)
+    status_tbl.add_column("Path / Artifact", style="white")
+    status_tbl.add_column("Status", style="white")
+
+    def status_row(name, path, done):
+        status_tbl.add_row(name, str(path), "[green]DONE[/green]" if done else "[yellow]PENDING[/yellow]")
+
+    status_row("QC", clean_reads_dir, is_nonempty_dir(clean_reads_dir))
+    status_row("Assembly", raw_contigs_dir, any_fastas(raw_contigs_dir))
+    status_row("VPAC-single", vpac_out_dir / "mVC", is_nonempty_dir(vpac_out_dir / "mVC"))
+    status_row("VPAC-dual", vpac_out_dir / "mVC_dual", is_nonempty_dir(vpac_out_dir / "mVC_dual"))
+    status_row("Clustering", cluster_out_dir, is_nonempty_dir(cluster_out_dir))
+    console.print(Panel(status_tbl, border_style="blue", title="Resume status", title_align="left"))
+    console.print(Panel(f"Starting from: [bold]{start_step}[/bold]", border_style="magenta"))
+
+    if start_step == "done":
+        console.print(Panel.fit("[bold green]Everything already complete. Nothing to do.[/bold green]", border_style="green"))
+        return
+
+    if start_step == "qc":
+        run_qc(args, raw_fastq_dir, out_root, cfg_path)
 
     ensure_exists(clean_reads_dir, "QC should create Clean_reads/ under -o")
 
-    step_header("Step 2 — Assembly", f"{args.assembly.upper()} → raw_contigs/")
-    asm_cmd = [sys.executable, str(ASM_SCRIPT),
-               "-r", str(clean_reads_dir),
-               "-o", str(out_root),
-               "--tool", args.assembly,
-               "--parallel", str(args.parallel),
-               "-t", str(args.threads)]
-    if args.assembly == "spades" and args.spades_metaviral:
-        asm_cmd.append("--metaviral")
-    run(asm_cmd)
+    if start_step in ("qc", "assembly"):
+        run_assembly(args, clean_reads_dir, out_root, cfg_path)
 
     ensure_exists(raw_contigs_dir, "Assembly should create raw_contigs/ under -o")
 
-    step_header("Step 3 — VPAC classification", f"mode = {args.vpac}")
-    if args.vpac in ("single", "both"):
-        run([sys.executable, str(VPAC_SINGLE_SCRIPT),
-             "-i", str(raw_contigs_dir),
-             "-o", str(vpac_out_dir),
-             "-lmin", str(args.lmin),
-             "-lmax", str(args.lmax),
-             "-t", str(args.threads),
-             "--parallel", "1",
-             "-m", "FNN",
-             "-cf", str(cfg_path),
-        ])
+    if args.vpac == "single":
+        if start_step in ("qc", "assembly", "vpac_single"):
+            run_vpac_single(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+    elif args.vpac == "dual":
+        if start_step in ("qc", "assembly", "vpac_dual"):
+            run_vpac_dual(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+    else:
+        mvc_dir = vpac_out_dir / "mVC"
+        mvc_dual_dir = vpac_out_dir / "mVC_dual"
+        if start_step in ("qc", "assembly"):
+            if not is_nonempty_dir(mvc_dir):
+                run_vpac_single(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+            if not is_nonempty_dir(mvc_dual_dir):
+                run_vpac_dual(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+        elif start_step == "vpac_single":
+            run_vpac_single(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+            if not is_nonempty_dir(mvc_dual_dir):
+                run_vpac_dual(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+        elif start_step == "vpac_dual":
+            run_vpac_dual(args, raw_contigs_dir, vpac_out_dir, cfg_path)
+            if not is_nonempty_dir(mvc_dir):
+                run_vpac_single(args, raw_contigs_dir, vpac_out_dir, cfg_path)
 
-    if args.vpac in ("dual", "both"):
-        run([sys.executable, str(VPAC_DUAL_SCRIPT),
-             "-i", str(raw_contigs_dir),
-             "-o", str(vpac_out_dir),
-             "-d", args.device,
-             "-cf", str(cfg_path),
-        ])
-
-    step_header("Step 4 — Clustering", f"tool = {args.cluster}")
-    run([sys.executable, str(CLUST_SCRIPT),
-         "-i", str(vpac_out_dir),
-         "-o", str(cluster_out_dir),
-         "--tool", args.cluster,
-         "--parallel", str(args.parallel),
-         "-cf", str(cfg_path),
-    ])
+    if start_step in ("qc", "assembly", "vpac_single", "vpac_dual", "clustering"):
+        run_clustering(args, vpac_out_dir, cluster_out_dir, cfg_path)
 
     console.print(Panel.fit(
         f"[bold green]All done![/bold green]\n\n"
