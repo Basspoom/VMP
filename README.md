@@ -352,18 +352,18 @@ python ~/VMP/bin/Clustering.py -h
 
 `Binning.py`
 
-Bins **non-viral contigs** into MAGs using ***metaWRAP*** and dereplication with ***dRep***.
+Bins **non-viral contigs** into MAGs using ***SemiBin2***, check quality by ***CheckM2*** and dereplication with ***dRep***.
 
 
 #### Command Template:
 ```bash
-conda activate Your_VMP_env
-python ~/VMP/bin/Binning.py -i ~/xxx/raw_contigs/ -o ~/xxx/out_MAGs -cf ~/VMP/config.yml 
+conda activate Your_Binning_env
+python ~/VMP/bin/Binning.py -r ~/xxx/Clean_reads -i ~/xxx/raw_contigs/ -out ~/xxx/out_Bins -cf ~/VMP/config.yml --minfasta-kb 50 --min-len 500 --min-completeness 70 --max-contamination 5
 ```
 
 *For more detailed parameters, run:*
 ```bash
-conda activate Your_VMP_env
+conda activate Your_Binning_env
 python ~/VMP/bin/Binning.py -h
 ```
 
