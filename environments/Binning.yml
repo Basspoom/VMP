@@ -28,3 +28,4 @@ dependencies:
   - trim-galore
   - openjdk=8             
   - seaborn
+  - infomap
