@@ -1,206 +1,385 @@
 import os
+import sys
 import glob
-import datetime
-import types
-import csv
-import concurrent.futures
-import subprocess
-import argparse
-from multiprocessing import Pool
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-import re
 import shutil
 import argparse
 import subprocess
+import yaml
+import pandas as pd
+import multiprocessing as mp
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.rule import Rule
+from rich.markdown import Markdown
+
+console = Console()
 
 
-def Getfasta_list(input_dir):
-    path = input_dir
-    fasta_list = []
-    for i in os.listdir(path):
-        if os.path.isdir(i):
+def run_cmd(cmd, desc=None):
+    if isinstance(cmd, str):
+        shell = True
+        cmd_str = cmd
+    else:
+        shell = False
+        cmd_str = " ".join(cmd)
+
+    if desc:
+        console.print(f"[bold cyan]> {desc}[/bold cyan]")
+    console.print(f"[dim]{cmd_str}[/dim]")
+    proc = subprocess.run(cmd, shell=shell)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Command failed (exit {proc.returncode}): {cmd_str}")
+
+
+def get_sample_list(raw_dir):
+    samples = []
+    for name in os.listdir(raw_dir):
+        p = os.path.join(raw_dir, name)
+        if os.path.isdir(p):
+            samples.append(name)
+    samples = sorted(samples)
+    console.print(f"[bold green]Sample list:[/bold green] {samples}")
+    return samples
+
+
+def find_contig_fasta(contig_dir, sample):
+    patterns = [
+        os.path.join(contig_dir, f"{sample}*.fa"),
+        os.path.join(contig_dir, f"{sample}*.fasta"),
+        os.path.join(contig_dir, f"{sample}*.fna"),
+        os.path.join(contig_dir, f"{sample}*.fa.gz"),
+        os.path.join(contig_dir, f"{sample}*.fasta.gz"),
+        os.path.join(contig_dir, f"{sample}*.fna.gz"),
+    ]
+    candidates = []
+    for pat in patterns:
+        candidates.extend(glob.glob(pat))
+
+    candidates = sorted(set(candidates))
+    if not candidates:
+        raise FileNotFoundError(f"No contig fasta found for sample {sample} under {contig_dir}")
+    if len(candidates) > 1:
+        console.print(
+            f"[yellow]Warning: multiple contig files for {sample}, use first one:[/yellow]\n"
+            + "\n".join(candidates)
+        )
+    return candidates[0]
+
+
+def filter_checkm2_bins(
+    quality_tsv,
+    bins_dir,
+    clean_dir,
+    min_completeness,
+    max_contamination,
+    ext="fa",
+):
+    os.makedirs(clean_dir, exist_ok=True)
+    if not os.path.exists(quality_tsv):
+        console.print(f"[red]CheckM2 report not found: {quality_tsv}[/red]")
+        return 0
+
+    df = pd.read_csv(quality_tsv, sep="\t")
+    required = {"Name", "Completeness", "Contamination"}
+    if not required.issubset(df.columns):
+        raise ValueError(f"quality_report.tsv missing columns: {required - set(df.columns)}")
+
+    filtered = df[
+        (df["Completeness"] >= min_completeness)
+        & (df["Contamination"] <= max_contamination)
+    ].copy()
+
+    console.print(
+        f"  Total bins: {len(df)}, "
+        f"after filter (Comp>={min_completeness}, Cont<={max_contamination}): "
+        f"[bold]{len(filtered)}[/bold]"
+    )
+
+    passed = []
+    for name in filtered["Name"]:
+        src = os.path.join(bins_dir, f"{name}.{ext}")
+        if not os.path.exists(src):
+            console.print(f"[yellow]  Skip: bin fasta not found: {src}[/yellow]")
             continue
-        else:
-            match = re.search(r'(.*?)\.\w+\.fasta', i)
-            if match:
-                fasta_list.append(match.group(1))
-            else:
-                continue
-    print('Your sample list:', fasta_list)
-    return fasta_list
+        dst = os.path.join(clean_dir, f"{name}.{ext}")
+        shutil.copy2(src, dst)
+        passed.append(name)
+
+    filtered = filtered[filtered["Name"].isin(passed)]
+    if len(filtered) > 0:
+        out_qc = os.path.join(clean_dir, "quality_report.filtered.tsv")
+        filtered.to_csv(out_qc, sep="\t", index=False)
+        console.print(f"  Filtered quality report saved: {out_qc}")
+    else:
+        console.print("  No bins copied after filtering.")
+    return len(filtered)
 
 
+def process_sample(
+    sample,
+    raw_dir,
+    contig_dir,
+    mapping_root,
+    semibin_root,
+    checkm_root,
+    clean_root,
+    threads,
+    minfasta_kb,
+    min_len,
+    min_completeness,
+    max_contamination,
+    checkm2_db,
+    keep_temp,
+):
 
-def binning(input_dir, out_dir, fastq_dir, fasta_list, thread, completion, contamination, metabat2, maxbin2, concoct, min_contig_length, run_checkm, single_end, interleaved, 
-            skip_refinement, skip_checkm, skip_consolidation, keep_ambiguous, remove_ambiguous, quick, strict_cutoff, permissive_cutoff, skip_checkm_reassembly, parallel, mdmcleaner):
-    
-    os.makedirs(os.path.join(out_dir, "bin"), exist_ok=True)
+    try:
+        console.print(Rule(title=f"[bold]Sample {sample}[/bold]"))
 
-    print("Process bin of non-viral contigs...(binning, bin_refinement, reassemble_bins, and classify_bins)")
+        reads1 = os.path.join(raw_dir, sample, f"{sample}_host_removed_1.fastq")
+        reads2 = os.path.join(raw_dir, sample, f"{sample}_host_removed_2.fastq")
 
-    for item in fasta_list:
-        command_binning = f"metawrap binning {fastq_dir}/{item}/*_1.fastq {fastq_dir}/{item}/*_2.fastq -o {out_dir}/bin/{item}_bin -t {thread} -a {input_dir}/{item}.*.fasta"
+        if not (os.path.exists(reads1) and os.path.exists(reads2)):
+            console.print(
+                f"[yellow]Skip {sample}: host_removed FASTQ not found under {os.path.join(raw_dir, sample)}[/yellow]"
+            )
+            return
 
-        if metabat2:
-            command_binning += " --metabat2"
-        if maxbin2:
-            command_binning += " --maxbin2"
-        if concoct:
-            command_binning += " --concoct"
-        if min_contig_length:
-            command_binning += f" -l {min_contig_length}"
-        if run_checkm:
-            command_binning += " --run-checkm"
-        if single_end:
-            command_binning += " --single-end"
-        if interleaved:
-            command_binning += " --interleaved"
+        try:
+            contig_fa = find_contig_fasta(contig_dir, sample)
+        except FileNotFoundError as e:
+            console.print(f"[yellow]{e}[/yellow]")
+            return
 
-        os.system(command_binning)
+        console.print(f"  Contigs: {contig_fa}")
+        console.print(f"  Reads:   {reads1}, {reads2}")
 
-        command_refinement = f"metawrap bin_refinement -o {out_dir}/bin/{item}_refbin -t {thread} -A {out_dir}/bin/{item}_bin/metabat2_bins/ -B {out_dir}/bin/{item}_bin/maxbin2_bins/ -C {out_dir}/bin/{item}_bin/concoct_bins/ -c {completion} -x {contamination}"
+        sample_map_dir = os.path.join(mapping_root, sample)
+        os.makedirs(sample_map_dir, exist_ok=True)
 
-        if skip_refinement:
-            command_refinement += " --skip-refinement"
-        if skip_checkm:
-            command_refinement += " --skip-checkm"
-        if skip_consolidation:
-            command_refinement += " --skip-consolidation"
-        if keep_ambiguous:
-            command_refinement += " --keep-ambiguous"
-        if remove_ambiguous:
-            command_refinement += " --remove-ambiguous"
-        if quick:
-            command_refinement += " --quick"
+        index_prefix = os.path.join(sample_map_dir, f"{sample}.contigs")
+        sam = os.path.join(sample_map_dir, f"{sample}.sam")
+        bam = os.path.join(sample_map_dir, f"{sample}.bam")
+        mapped_bam = os.path.join(sample_map_dir, f"{sample}.mapped.bam")
+        sorted_bam = os.path.join(sample_map_dir, f"{sample}.mapped.sorted.bam")
 
-        os.system(command_refinement)
+        run_cmd(
+            f"bowtie2-build --threads {threads} -f {contig_fa} {index_prefix}",
+            desc=f"{sample}: bowtie2-build"
+        )
 
-        command_reassembly = f"metawrap reassemble_bins -o {out_dir}/bin/{item}_binReass -1 {fastq_dir}/{item}/*_1.fastq -2 {fastq_dir}/{item}/*_2.fastq -t {thread} -m 800 -c {completion} -x {contamination} -b {out_dir}/bin/{item}_refbin/metawrap_{completion}_{contamination}_bins"
+        run_cmd(
+            f"bowtie2 -q --fr -x {index_prefix} -1 {reads1} -2 {reads2} "
+            f"-S {sam} -p {threads}",
+            desc=f"{sample}: bowtie2 mapping"
+        )
 
-        if strict_cutoff:
-            command_reassembly += " --strict-cut-off"
-        if permissive_cutoff:
-            command_reassembly += " --permissive-cut-off"
-        if skip_checkm_reassembly:
-            command_reassembly += " --skip-checkm"
-        if parallel:
-            command_reassembly += " --parallel"
-        if mdmcleaner:
-            command_reassembly += " --mdmcleaner"
+        run_cmd(
+            f"samtools view -@ {threads} -h -b -S {sam} -o {bam}",
+            desc=f"{sample}: samtools view"
+        )
+        run_cmd(
+            f"samtools view -@ {threads} -b -F 4 {bam} -o {mapped_bam}",
+            desc=f"{sample}: samtools filter mapped"
+        )
+        run_cmd(
+            f"samtools sort -@ {threads} {mapped_bam} -o {sorted_bam}",
+            desc=f"{sample}: samtools sort"
+        )
+        run_cmd(
+            f"samtools index {sorted_bam}",
+            desc=f"{sample}: samtools index"
+        )
 
-        os.system(command_reassembly)
+        if not keep_temp:
+            for f in [sam, bam, mapped_bam]:
+                if os.path.exists(f):
+                    os.remove(f)
 
-        command_classification = f"metawrap classify_bins -b {out_dir}/bin/{item}_binReass/reassembled_bins -o {out_dir}/bin/{item}_binClass -t {thread}"
-        os.system(command_classification)
+        sample_semibin_dir = os.path.join(semibin_root, sample)
+        os.makedirs(sample_semibin_dir, exist_ok=True)
+
+        semibin_cmd = (
+            f"SemiBin2 single_easy_bin "
+            f"-i {contig_fa} "
+            f"-b {sorted_bam} "
+            f"-o {sample_semibin_dir} "
+            f"--environment global "
+            f"--minfasta-kb {minfasta_kb} "
+            f"--random-seed 66 "
+            f"--max-edges 200 "
+            f"--min-len {min_len} "
+            f"--sequencing-type short_read "
+            f"--verbose "
+            # f"--no-recluster "
+            f"-t {threads} "
+            f"--compression none"
+        )
+        run_cmd(semibin_cmd, desc=f"{sample}: SemiBin2 single_easy_bin")
+
+        bins_dir = os.path.join(sample_semibin_dir, "output_bins")
+        if not os.path.isdir(bins_dir):
+            console.print(f"[red]{sample}: SemiBin2 output_bins not found: {bins_dir}[/red]")
+            return
+
+        sample_checkm_dir = os.path.join(checkm_root, sample)
+        os.makedirs(sample_checkm_dir, exist_ok=True)
+
+        checkm_cmd = (
+            f"checkm2 predict "
+            f"-x fa "
+            f"--database_path {checkm2_db} "
+            f"--threads {threads} "
+            f"--input {bins_dir} "
+            f"--output-directory {sample_checkm_dir}"
+        )
+        run_cmd(checkm_cmd, desc=f"{sample}: CheckM2 predict")
+
+        quality_tsv = os.path.join(sample_checkm_dir, "quality_report.tsv")
+        sample_clean_dir = os.path.join(clean_root, sample)
+
+        console.print(
+            f"  Filtering bins by completeness>={min_completeness}, "
+            f"contamination<={max_contamination}"
+        )
+        n_kept = filter_checkm2_bins(
+            quality_tsv=quality_tsv,
+            bins_dir=bins_dir,
+            clean_dir=sample_clean_dir,
+            min_completeness=min_completeness,
+            max_contamination=max_contamination,
+            ext="fa",
+        )
+        console.print(f"[bold green]Sample {sample}: kept {n_kept} bins after filtering.[/bold green]")
+
+    except Exception as e:
+        console.print(f"[red]Error in sample {sample}: {e}[/red]")
 
 
+def run_drep(clean_root, drep_out_dir, threads):
+    console.print(Rule(title="[bold]dRep dereplication across all samples[/bold]"))
 
-def drep(fasta_list, out_dir, thread, ani, completion_drep, contamination_drep, cov_thresh, length, checkm_method, clusterAlg, skip_plots):
-    os.makedirs(os.path.join(out_dir, "bin/dRep_output"), exist_ok=True)
+    genomes = []
+    if not os.path.isdir(clean_root):
+        console.print(f"[yellow]clean_bin directory not found: {clean_root}, skip dRep.[/yellow]")
+        return
 
-    print("Using dRep to remove redundancy...")
+    for sample in sorted(os.listdir(clean_root)):
+        sample_dir = os.path.join(clean_root, sample)
+        if not os.path.isdir(sample_dir):
+            continue
+        genomes.extend(sorted(glob.glob(os.path.join(sample_dir, "*.fa"))))
 
-    for item in fasta_list:
-        command_drep = f"dRep dereplicate {out_dir}/bin/dRep_output/{item} -g {out_dir}/bin/{item}_refbin/metawrap_{completion_drep}_{contamination_drep}_bins/*.fa -p {thread} "
+    if not genomes:
+        console.print("[yellow]No .fa bins found under clean_bin; skip dRep.[/yellow]")
+        return
 
-        if ani:
-            command_drep += f" -sa {ani}"
-        if completion_drep:
-            command_drep += f" -comp {completion_drep}"       
-        if contamination_drep:
-            command_drep += f" -con {contamination_drep}"
-        if cov_thresh:
-            command_drep += f" -nc {cov_thresh}"       
-        if length:
-            command_drep += f" -l {length}"
-        if checkm_method:
-            command_drep += f" --checkM_method {checkm_method}"
-        if clusterAlg:
-            command_drep += f" --clusterAlg {clusterAlg}"
-        if skip_plots:
-            command_drep += " --skip_plots"
+    os.makedirs(drep_out_dir, exist_ok=True)
+    genomes_dir = os.path.join(drep_out_dir, "genomes")
+    os.makedirs(genomes_dir, exist_ok=True)
 
-        os.system(command_drep)
+    for g in genomes:
+        dst = os.path.join(genomes_dir, os.path.basename(g))
+        if not os.path.exists(dst):
+            shutil.copy2(g, dst)
 
-    print("Done remove redundancy!")
+    pattern = os.path.join(genomes_dir, "*.fa")
+    drep_cmd = f"dRep dereplicate {drep_out_dir} -g '{pattern}' -p {threads}"
+    run_cmd(drep_cmd, desc="dRep dereplicate")
 
-
-
+    console.print(
+        f"[bold green]dRep dereplication finished. Non-redundant bins and reports are in: {drep_out_dir}[/bold green]"
+    )
 
 def custom_help():
-    YELLOW = "\033[93m"  # Yellow
-    GREEN = "\033[92m"   # Green
-    BLUE = "\033[94m"    # Blue
-    PURPLE = "\033[95m"  # Purple
-    RED = "\033[91m"     # Red
-    RESET = "\033[0m"    # Reset to default color
+    console = Console()
 
-    print("\n" + RED + "This script is designed to use MetaWRAP for binning, dRep for de-duplication, and GTDB for annotation to generate high-quality Metagenome-Assembled Genomes (MAGs) from non-viral contigs." + RESET)
+    intro = (
+        "The 'Binning' script performs contig binning for each sample:\n"
+        "  1) Map host-removed reads to contigs and build sorted BAM;\n"
+        "  2) Run SemiBin2 to generate bins;\n"
+        "  3) Run CheckM2 for quality assessment and filter bins by completeness/contamination;\n"
+        "  4) Optionally run dRep across all clean bins to obtain a non-redundant MAG set."
+    )
+    console.print(Panel(intro, border_style="cyan", title="Binning", title_align="left"))
 
-    print("\n" + PURPLE + "Examples:" + RESET)
-    print("  meta_wrapper -i /data/input -o /data/output -t 50 --metabat2 --ani 0.95")
+    examples = Markdown(
+        "\n**Examples:**\n"
+        "```bash\n"
+        "Binning \\\n"
+        "  -cf .../config.yml \\\n"
+        "  -r  .../QC/Clean_reads \\\n"
+        "  -i  .../Viral_contigs/megahit-single/mNVC_dual \\\n"
+        "  -out .../Viral_contigs/megahit-single/Bin \\\n"
+        "  -t 20 -p 4 \\\n"
+        "  --minfasta-kb 25 --min-len 500 \\\n"
+        "  --min-completeness 50 --max-contamination 10\n"
+        "```"
+    )
+    console.print(examples)
 
-    print("\n" + GREEN + "The -i parameter specifies the directory containing input metagenomic non-viral contigs (mNVC) files." + RESET)
-    print("  " + BLUE + "/path/to/input/sample1.mNVC.fasta" + RESET)
-    print("  " + BLUE + "/path/to/input/sample2.mNVC.fasta" + RESET)
+    reads_md = Markdown(
+        "**Input reads location (-r):**\n"
+        "Directory of clean reads produced by QC, containing host-removed paired-end FASTQ files:\n"
+        "```text\n"
+        "/path/to/Clean_reads/A1/A1_host_removed_1.fastq\n"
+        "/path/to/Clean_reads/A1/A1_host_removed_2.fastq\n"
+        "/path/to/Clean_reads/A2/A2_host_removed_1.fastq\n"
+        "/path/to/Clean_reads/A2/A2_host_removed_2.fastq\n"
+        "...\n"
+        "```\n"
+    )
+    contig_md = Markdown(
+        "**Contig directory (-i):**\n"
+        "Directory containing contigs for each sample, e.g.:\n"
+        "```text\n"
+        "/path/to/mNVC_dual/A1.mNVC.fasta\n"
+        "/path/to/mNVC_dual/A2.mNVC.fasta\n"
+        "```\n"
+        "The script will search for files matching pattern `SAMPLE*.fa/fasta/fna`."
+    )
+    out_md = Markdown(
+        "**Output directory (-out):**\n"
+        "Will contain subdirectories:\n"
+        "- `mapping/`  : Bowtie2 + samtools mapping results\n"
+        "- `semibin2/`: SemiBin2 outputs (`output_bins/` per sample)\n"
+        "- `checkm2/` : CheckM2 quality reports per sample\n"
+        "- `clean_bin/`: filtered bins and `quality_report.filtered.tsv` per sample\n"
+        "- `dRep/`    : non-redundant MAGs and dRep reports (if dRep is enabled)\n"
+    )
 
-    print("\n" + GREEN + "The -o parameter specifies the output directory for the results." + RESET)
+    console.print(reads_md)
+    console.print(contig_md)
+    console.print(out_md)
+    console.print(Rule())
 
-    print("\n" + GREEN + "The -t parameter specifies the number of threads to use for processing (default: 50)." + RESET)
+    console.print("[bold]Global parameters[/bold]")
+    g_tbl = Table(show_header=False, box=None, pad_edge=False)
+    g_tbl.add_column("Flag", style="bold cyan", no_wrap=True)
+    g_tbl.add_column("Description", style="white")
+    g_tbl.add_row("-cf, --config", "Path to config.yml for env/dbs.")
+    g_tbl.add_row("-r, --raw_data", "Directory containing per-sample host_removed FASTQ subdirectories.")
+    g_tbl.add_row("-i, --contig_dir", "Directory containing per-sample contig FASTA files.")
+    g_tbl.add_row("-out, --out_dir", "Output directory for binning results.")
+    g_tbl.add_row("-t, --thread", "Threads per sample.")
+    g_tbl.add_row("-p, --parallel", "Number of samples to process in parallel (default: 1).")
+    console.print(Panel(g_tbl, border_style="cyan", title="Global parameters", title_align="left"))
 
-    print("\n" + GREEN + "The -c parameter sets the minimum bin completion percentage (default: 70)." + RESET)
+    console.print()
+    console.print("[bold]Binning and filtering parameters[/bold]")
+    b_tbl = Table(show_header=False, box=None, pad_edge=False)
+    b_tbl.add_column("Flag", style="bold cyan", no_wrap=True)
+    b_tbl.add_column("Description", style="white")
+    b_tbl.add_row("--minfasta-kb", "Minimum bin size in Kbp (default: 200).")
+    b_tbl.add_row("--min-len", "Minimal contig length for binning (default: 500).")
+    b_tbl.add_row("--min-completeness", "Minimum completeness to keep a bin (default: 50).")
+    b_tbl.add_row("--max-contamination", "Maximum contamination to keep a bin (default: 10).")
+    b_tbl.add_row("--skip-drep", "Skip dRep dereplication across clean bins (default: run dRep).")
+    b_tbl.add_row("--keep-temp", "Keep intermediate mapping files (sam/bam). Default: delete.")
+    console.print(Panel(b_tbl, border_style="magenta", title="Binning and filtering", title_align="left"))
 
-    print("\n" + GREEN + "The -x parameter sets the maximum bin contamination percentage (default: 10)." + RESET)
-
-    print("\n" + PURPLE + "Detailed parameters")
-    print("" + GREEN + "=" * 50 + " " + RESET + YELLOW + "Global parameters" + RESET + " " + GREEN + "=" * 50 + RESET)
-
-    print("\n" + YELLOW + "Global parameters:" + RESET)
-    print(f"  {'-i, --input_dir':<40} Directory containing the metagenomic non-viral contigs (mNVC) files.")
-    print(f"  {'-o, --out_dir':<40} Output directory for high-quality non-viral genomes (MAGs).")
-    print(f"  {'-t, --thread':<40} Number of parallel threads for processing (default: 50).")
-    print(f"  {'-c, --completion':<40} Minimum bin completion percentage (default: 70).")
-    print(f"  {'-x, --contamination':<40} Maximum bin contamination percentage (default: 10).")
-
-    print("\n" + GREEN + "=" * 48 + " " + RESET + YELLOW + "Part1: Binning Options" + RESET + " " + GREEN + "=" * 47 + RESET)
-
-    print("\n" + YELLOW + "MetaWRAP Binning Options:" + RESET)
-    print(f"  {'--metabat2':<40} Use metaBAT2 for binning.")
-    print(f"  {'--maxbin2':<40} Use MaxBin2 for binning.")
-    print(f"  {'--concoct':<40} Use CONCOCT for binning.")
-    print(f"  {'--min_contig_length':<40} Minimum contig length to bin.")
-    print(f"  {'--run_checkm':<40} Run CheckM immediately on the bin results.")
-    print(f"  {'--single_end':<40} Use single-end reads.")
-    print(f"  {'--interleaved':<40} Input read files contain interleaved paired-end reads.")
-
-    print("\n" + YELLOW + "Refinement Options:" + RESET)
-    print(f"  {'--skip_refinement':<40} Don't use binning_refiner.")
-    print(f"  {'--skip_checkm':<40} Don't run CheckM to assess bins.")
-    print(f"  {'--skip_consolidation':<40} Skip consolidation of bins.")
-    print(f"  {'--keep_ambiguous':<40} Keep ambiguous contigs in all bins.")
-    print(f"  {'--remove_ambiguous':<40} Remove ambiguous contigs from all bins.")
-    print(f"  {'--quick':<40} Quick mode for CheckM.")
-
-    print("\n" + YELLOW + "Reassembly & Classification Options:" + RESET)
-    print(f"  {'--strict_cutoff':<40} Use strict cutoff for reassembly.")
-    print(f"  {'--permissive_cutoff':<40} Use permissive cutoff for reassembly.")
-    print(f"  {'--skip_checkm_reassembly':<40} Don't run CheckM during reassembly.")
-    print(f"  {'--parallel':<40} Run SPAdes reassembly in parallel.")
-    print(f"  {'--mdmcleaner':<40} Use MDMcleaner results.")
-
-
-    print("\n" + GREEN + "=" * 49 + " " + RESET + YELLOW + "Part2: dRep Options" + RESET + " " + GREEN + "=" * 49 + RESET)
-
-    print("\n" + YELLOW + "dRep Parameters:" + RESET)
-    print(f"  {'-ani, --ani':<40} Average nucleotide identity threshold for secondary clustering (default: 0.95).")
-    print(f"  {'-ct, --cov_thresh':<40} Minimum level of overlap between genomes (default: 0.1).")
-    print(f"  {'-comp, --completion_drep':<40} Minimum genome completeness (default: None).")
-    print(f"  {'-con, --contamination_drep':<40} Maximum genome contamination_drep (default: None).")
-    print(f"  {'-l, --length':<40} Minimum genome length (default: None).")
-    print(f"  {'--checkm_method':<40} CheckM method to use (default: 'lineage_wf').")
-    print(f"  {'--clusterAlg':<40} Clustering algorithm to use (default: 'average').")
-    print(f"  {'--skip_plots':<40} If set, skip generating plots (default: False).")
+    console.print(Rule(style="dim"))
 
 
 class CustomArgumentParser(argparse.ArgumentParser):
@@ -210,73 +389,109 @@ class CustomArgumentParser(argparse.ArgumentParser):
 
 
 def main():
-    parser = CustomArgumentParser(description="Use MetaWRAP for binning, dRep for de-duplication, and GTDB for annotation to obtain high-quality MAGs from non-viral contigs.")
+    parser = CustomArgumentParser(description="Contig binning pipeline using SemiBin2, CheckM2, and optional dRep.")
+    parser.add_argument("-cf", "--config", type=str, help="Path to config.yml for env/tools/dbs")
+    parser.add_argument("-r", "--raw_data", type=str, required=True, help="Clean_reads directory from QC (contains per-sample host_removed fastq).")
+    parser.add_argument("-i", "--contig_dir", type=str, required=True, help="Directory with per-sample contig FASTA files.")
+    parser.add_argument("-out", "--out_dir", type=str, required=True, help="Output directory for binning results.")
+    parser.add_argument("-t", "--thread", type=int, default=20, help="Threads per sample for bowtie2/samtools/SemiBin2/CheckM2 (default: 20).")
+    parser.add_argument("-p", "--parallel", type=int, default=1, help="Number of samples to process in parallel (default: 1).")
     
-    parser.add_argument("-i", "--input_dir", type=str, required=True, help="The metagenomic non-viral contigs (mNVC, fasta) file directory, such as /xx/mNVC (mNVC/sample1.mNVC.fasta, mNVC/sample2.mNVC.fasta ...)")
-    parser.add_argument("-o", "--out_dir", type=str, required=True, help="The location for output MAG (high quality non-viral genomes)")
-    parser.add_argument("-t", "--thread", type=int, default=50, help="Number of parallel threads (default: 50)")
-    parser.add_argument("-c", "--completion", type=int, default=70, help="Minimum bin completion percentage (default: 70)")
-    parser.add_argument("-x", "--contamination", type=int, default=10, help="Maximum bin contamination percentage (default: 10)")
+    parser.add_argument("--minfasta-kb", type=int, default=200, help="Minimum bin size in Kbp (default: 200).")
+    parser.add_argument("--min-len", type=int, default=500,  help="Minimal contig length used for binning (default: 500).")
+    parser.add_argument("--min-completeness", type=float, default=50.0, help="Minimum completeness to keep a bin (default: 50).")
+    parser.add_argument("--max-contamination", type=float, default=10.0,help="Maximum contamination to keep a bin (default: 10).")
+    parser.add_argument("--checkm2-db", type=str, default=None, help="Optional: path to CheckM2 diamond db (.dmnd). If not set, use config.yml checkM_db/uniref100.KO.1.dmnd")
+    parser.add_argument("--skip-drep", action="store_true", help="Skip dRep dereplication across clean bins (default: run dRep).")
+    parser.add_argument("--keep-temp", action="store_true", help="Keep intermediate mapping files (sam/bam). Default: delete.")
 
-    #### metawrap 
-    # binning
-    parser.add_argument("--metabat2", action='store_true', help="Use metaBAT2 for binning.")
-    parser.add_argument("--maxbin2", action='store_true', help="Use MaxBin2 for binning.")
-    parser.add_argument("--concoct", action='store_true', help="Use CONCOCT for binning.")
-    parser.add_argument("--min_contig_length", type=int, help="Minimum contig length to bin.")
-    parser.add_argument("--run_checkm", action='store_true', help="Run CheckM immediately on the bin results.")
-    parser.add_argument("--single_end", action='store_true', help="Use single-end reads.")
-    parser.add_argument("--interleaved", action='store_true', help="Input read files contain interleaved paired-end reads.")
-
-    # refinement
-    parser.add_argument("--skip_refinement", action='store_true', help="Don't use binning_refiner.")
-    parser.add_argument("--skip_checkm", action='store_true', help="Don't run CheckM to assess bins.")
-    parser.add_argument("--skip_consolidation", action='store_true', help="Skip consolidation of bins.")
-    parser.add_argument("--keep_ambiguous", action='store_true', help="Keep ambiguous contigs in all bins.")
-    parser.add_argument("--remove_ambiguous", action='store_true', help="Remove ambiguous contigs from all bins.")
-    parser.add_argument("--quick", action='store_true', help="Quick mode for CheckM.")
-
-    # reassembly & classification (Na)
-    parser.add_argument("--strict_cutoff", action='store_true', help="Use strict cutoff for reassembly.")
-    parser.add_argument("--permissive_cutoff", action='store_true', help="Use permissive cutoff for reassembly.")
-    parser.add_argument("--skip_checkm_reassembly", action='store_true', help="Don't run CheckM during reassembly.")
-    parser.add_argument("--parallel", action='store_true', help="Run SPAdes reassembly in parallel.")
-    parser.add_argument("--mdmcleaner", action='store_true', help="Use MDMcleaner results.")
-
-
-    #### dRep
-    parser.add_argument("-ani", "--ani", type=float, default=0.95, help="Average nucleotide identity threshold for secondary clustering (default: 0.95).")
-    parser.add_argument("-ct", "--cov_thresh", type=float, default=0.1, help="Minimum level of overlap between genomes when doing secondary comparisons (default: 0.1).")
-    parser.add_argument("-comp", "--completion_drep", type=float, default=None, help="Minimum genome completeness (default: None).")
-    parser.add_argument("-con", "--contamination_drep", type=float, default=None, help="Maximum genome contamination (default: None).")
-    parser.add_argument("-l", "--length", type=int, default=None, help="Minimum genome length (default: None).")
-    parser.add_argument("--checkm_method", type=str, default='lineage_wf', help="CheckM method to use ('lineage_wf' or 'taxonomy_wf', default: 'lineage_wf').")
-    parser.add_argument("--clusterAlg", type=str, default='average', help="Clustering algorithm to use (default: 'average').")
-    parser.add_argument("--skip_plots", action='store_true',  help="If set, skip generating plots (default: False).")
-    
     args = parser.parse_args()
 
-    
+    cfg = {}
+    if args.config:
+        with open(args.config, "r") as f:
+            raw = yaml.safe_load(f) or {}
+            cfg.update(raw)
 
-    fasta_list = Getfasta_list(args.input_dir)
+    bin_env = cfg.get("Binning")
+    if bin_env:
+        bin_env = str(bin_env).strip().strip("'\"")
+        env_bin = os.path.join(bin_env, "bin")
+        if os.path.isdir(env_bin):
+            os.environ["PATH"] = env_bin + os.pathsep + os.environ.get("PATH", "")
+            console.print(f"[green]Using Binning env bin:[/green] {env_bin}")
+        else:
+            console.print(f"[yellow]Warning: Binning env bin not found: {env_bin}[/yellow]")
 
-    binning(args.input_dir, args.out_dir, args.fastq_dir, fasta_list, args.thread, args.completion, args.contamination, args.metabat2, args.maxbin2, args.concoct, args.min_contig_length, args.run_checkm, args.single_end, args.interleaved, 
-            args.skip_refinement, args.skip_checkm, args.skip_consolidation, args.keep_ambiguous, args.remove_ambiguous, args.quick, args.strict_cutoff, args.permissive_cutoff, args.skip_checkm_reassembly, args.parallel, args.mdmcleaner)
+    if args.checkm2_db:
+        checkm2_db = args.checkm2_db
+    else:
+        checkm_root = cfg.get("checkM_db")
+        if not checkm_root:
+            console.print(
+                "[red]Error: checkM_db not set in config.yml and --checkm2-db not provided.[/red]"
+            )
+            sys.exit(1)
+        checkm_root = str(checkm_root).strip().strip("'\"")
+        checkm2_db = os.path.join(checkm_root, "uniref100.KO.1.dmnd")
 
-    drep(fasta_list, args.out_dir, args.thread, args.ani, args.completion, args.completion_drep, args.cov_thresh, args.length, args.checkm_method, args.clusterAlg, args.skip_plots)
+    console.print(f"[bold cyan]CheckM2 database:[/bold cyan] {checkm2_db}")
 
+    raw_dir = args.raw_data
+    contig_dir = args.contig_dir
+    out_dir = args.out_dir
+    threads = args.thread
 
+    mapping_root = os.path.join(out_dir, "mapping")
+    semibin_root = os.path.join(out_dir, "semibin2")
+    checkm_root = os.path.join(out_dir, "checkm2")
+    clean_root = os.path.join(out_dir, "clean_bin")
+    drep_root = os.path.join(out_dir, "dRep")
 
+    for d in [mapping_root, semibin_root, checkm_root, clean_root]:
+        os.makedirs(d, exist_ok=True)
+
+    samples = get_sample_list(raw_dir)
+
+    jobs = []
+    for sample in samples:
+        jobs.append(
+            (
+                sample,
+                raw_dir,
+                contig_dir,
+                mapping_root,
+                semibin_root,
+                checkm_root,
+                clean_root,
+                threads,
+                args.minfasta_kb,
+                args.min_len,
+                args.min_completeness,
+                args.max_contamination,
+                checkm2_db,
+                args.keep_temp,
+            )
+        )
+
+    if args.parallel > 1:
+        console.print(
+            f"[bold cyan]Processing samples in parallel: {args.parallel} workers[/bold cyan]"
+        )
+        with mp.Pool(processes=args.parallel) as pool:
+            pool.starmap(process_sample, jobs)
+    else:
+        for job in jobs:
+            process_sample(*job)
+
+    if args.skip_drep:
+        console.print("[yellow]Skipping dRep dereplication (--skip-drep specified).[/yellow]")
+    else:
+        run_drep(clean_root, drep_root, threads)
+
+    console.print(Rule())
+    console.print("[bold cyan]Binning finished for all samples.[/bold cyan]")
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
- 
-
-
-        
