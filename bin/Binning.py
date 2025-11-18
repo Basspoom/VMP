@@ -213,7 +213,7 @@ def process_sample(
             f"--sequencing-type short_read "
             f"--verbose "
             # f"--no-recluster "
-            f"-t {threads} "
+            f"-t 1 "
             f"--compression none"
         )
         run_cmd(semibin_cmd, desc=f"{sample}: SemiBin2 single_easy_bin")
@@ -260,11 +260,11 @@ def process_sample(
 def run_drep(clean_root, drep_out_dir, threads):
     console.print(Rule(title="[bold]dRep dereplication across all samples[/bold]"))
 
-    genomes = []
     if not os.path.isdir(clean_root):
         console.print(f"[yellow]clean_bin directory not found: {clean_root}, skip dRep.[/yellow]")
         return
 
+    genomes = []
     for sample in sorted(os.listdir(clean_root)):
         sample_dir = os.path.join(clean_root, sample)
         if not os.path.isdir(sample_dir):
@@ -279,18 +279,22 @@ def run_drep(clean_root, drep_out_dir, threads):
     genomes_dir = os.path.join(drep_out_dir, "genomes")
     os.makedirs(genomes_dir, exist_ok=True)
 
+    copied = []
     for g in genomes:
         dst = os.path.join(genomes_dir, os.path.basename(g))
         if not os.path.exists(dst):
             shutil.copy2(g, dst)
+        copied.append(dst)
 
-    pattern = os.path.join(genomes_dir, "*.fa")
-    drep_cmd = f"dRep dereplicate {drep_out_dir} -g '{pattern}' -p {threads}"
+    drep_cmd = ["dRep", "dereplicate", drep_out_dir, "-p", str(threads), "-g"]
+    drep_cmd.extend(copied)
+
     run_cmd(drep_cmd, desc="dRep dereplicate")
 
     console.print(
-        f"[bold green]dRep dereplication finished. Non-redundant bins and reports are in: {drep_out_dir}[/bold green]"
+        f"[bold green]dRep dereplication finished. Non-redundant bins and reports are in: {drep_out_dir}/dereplicated_genomes[/bold green]"
     )
+
 
 def custom_help():
     console = Console()
