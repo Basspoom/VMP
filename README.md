@@ -373,27 +373,6 @@ python ~/VMP/bin/Binning.py -h
 - Binning quality assessment (completeness, contamination)
 
 
-
-  
-  
-
-
-
-## Citing this work
-```bash
-*@article {xxxx,
-    author = {Bai, Zi-Peng and Zhao, Heng-Rui and Zhang, Ling-yu and Li, Bo-Rui and Chen, Yuxing and Qiong, Li and Zhou, Cong-Zhao},
-    title = {VMP: an AI-empowered pipeline for mining viruses in microbiomes},
-    elocation-id = {xxx},
-    year = {2025},
-    doi = {xxx},
-    publisher = {xxx},
-    URL = {xxx},
-    eprint = {xxx},
-    journal = {Microbiome}
-}
-```
-
   
   
 
