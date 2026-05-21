@@ -98,13 +98,6 @@ python Embedding_and_feature.py \
   --config-yml config.yml
 ```
 
-Example `config.yml` model section:
-
-```yaml
-VPAC_models: '/path/to/VMP/dependency/models/VPAC_models'
-Evo_models: '/path/to/VMP/dependency/models/Evo'
-```
-
 Expected output:
 
 ```text
