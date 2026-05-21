@@ -1,4 +1,4 @@
-# VPAC Training Scripts README
+# VPAC Training
 
 This directory contains the scripts and input files used to train and validate VPAC classifiers.
 
